@@ -267,11 +267,17 @@ func handleVolcTTSV3Response(c *gin.Context, resp *http.Response, info *relaycom
 				c.Header("Content-Type", contentType)
 				c.Header("Transfer-Encoding", "chunked")
 			}
-			if _, writeErr := c.Writer.Write(message.Payload); writeErr != nil {
+			written, writeErr := c.Writer.Write(message.Payload)
+			if written > 0 {
+				wroteAudio = true
+				c.Writer.Flush()
+			}
+			if writeErr != nil {
 				return nil, volcTTSStreamError(c, info, wroteAudio, fmt.Errorf("failed to write TTS audio: %w", writeErr), 499)
 			}
-			c.Writer.Flush()
-			wroteAudio = true
+			if written != len(message.Payload) {
+				return nil, volcTTSStreamError(c, info, wroteAudio, io.ErrShortWrite, 499)
+			}
 		case MsgTypeError:
 			return nil, volcTTSStreamError(
 				c,

@@ -1,10 +1,12 @@
 package volcengine
 
 import (
+	"bytes"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"strings"
 
@@ -59,31 +61,44 @@ type volcASRUtterance struct {
 	Text      string `json:"text"`
 }
 
-func buildVolcASRFlashRequest(c *gin.Context, request dto.AudioRequest) (volcASRFlashRequest, error) {
+const volcASRAudioDataPlaceholder = "__NEW_API_VOLC_ASR_AUDIO_DATA__"
+
+type volcASRRequestBody struct {
+	*io.PipeReader
+	contentLength int64
+}
+
+func (b *volcASRRequestBody) ContentLength() int64 {
+	if b == nil {
+		return 0
+	}
+	return b.contentLength
+}
+
+func buildVolcASRFlashRequestBody(c *gin.Context, request dto.AudioRequest) (*volcASRRequestBody, error) {
 	form, err := common.ParseMultipartFormReusable(c)
 	if err != nil {
-		return volcASRFlashRequest{}, fmt.Errorf("failed to parse audio form: %w", err)
+		return nil, fmt.Errorf("failed to parse audio form: %w", err)
 	}
-	defer form.RemoveAll()
 	files := form.File["file"]
 	if len(files) == 0 {
-		return volcASRFlashRequest{}, errors.New("file is required")
+		_ = form.RemoveAll()
+		return nil, errors.New("file is required")
 	}
-	file, err := files[0].Open()
+	fileHeader := files[0]
+	if fileHeader.Size > 100*1024*1024 {
+		_ = form.RemoveAll()
+		return nil, errors.New("audio file must not exceed 100MB")
+	}
+	file, err := fileHeader.Open()
 	if err != nil {
-		return volcASRFlashRequest{}, fmt.Errorf("failed to open audio file: %w", err)
+		_ = form.RemoveAll()
+		return nil, fmt.Errorf("failed to open audio file: %w", err)
 	}
-	defer file.Close()
-	audio, err := io.ReadAll(file)
-	if err != nil {
-		return volcASRFlashRequest{}, fmt.Errorf("failed to read audio file: %w", err)
-	}
-	if len(audio) > 100*1024*1024 {
-		return volcASRFlashRequest{}, errors.New("audio file must not exceed 100MB")
-	}
-	return volcASRFlashRequest{
+
+	envelope := volcASRFlashRequest{
 		User:  volcASRUser{UID: "new-api-relay"},
-		Audio: volcASRAudio{Data: base64.StdEncoding.EncodeToString(audio), Format: request.LocalAudioFormat},
+		Audio: volcASRAudio{Data: volcASRAudioDataPlaceholder, Format: request.LocalAudioFormat},
 		Request: volcASRRequest{
 			ModelName:      "bigmodel",
 			EnableITN:      true,
@@ -91,7 +106,60 @@ func buildVolcASRFlashRequest(c *gin.Context, request dto.AudioRequest) (volcASR
 			EnableDDC:      true,
 			ShowUtterances: true,
 		},
+	}
+	payload, err := common.Marshal(envelope)
+	if err != nil {
+		_ = file.Close()
+		_ = form.RemoveAll()
+		return nil, fmt.Errorf("failed to marshal volcengine ASR request: %w", err)
+	}
+	placeholderIndex := bytes.Index(payload, []byte(volcASRAudioDataPlaceholder))
+	if placeholderIndex < 0 {
+		_ = file.Close()
+		_ = form.RemoveAll()
+		return nil, errors.New("failed to build volcengine ASR streaming request")
+	}
+	prefix := payload[:placeholderIndex]
+	suffix := payload[placeholderIndex+len(volcASRAudioDataPlaceholder):]
+	contentLength := int64(len(prefix)) + int64(base64.StdEncoding.EncodedLen(int(fileHeader.Size))) + int64(len(suffix))
+
+	pipeReader, pipeWriter := io.Pipe()
+	go streamVolcASRRequest(pipeWriter, form, file, prefix, suffix)
+	return &volcASRRequestBody{
+		PipeReader:    pipeReader,
+		contentLength: contentLength,
 	}, nil
+}
+
+func streamVolcASRRequest(
+	pipeWriter *io.PipeWriter,
+	form *multipart.Form,
+	file multipart.File,
+	prefix []byte,
+	suffix []byte,
+) {
+	defer file.Close()
+	defer form.RemoveAll()
+
+	if _, err := pipeWriter.Write(prefix); err != nil {
+		_ = pipeWriter.CloseWithError(err)
+		return
+	}
+	encoder := base64.NewEncoder(base64.StdEncoding, pipeWriter)
+	if _, err := io.Copy(encoder, file); err != nil {
+		_ = encoder.Close()
+		_ = pipeWriter.CloseWithError(err)
+		return
+	}
+	if err := encoder.Close(); err != nil {
+		_ = pipeWriter.CloseWithError(err)
+		return
+	}
+	if _, err := pipeWriter.Write(suffix); err != nil {
+		_ = pipeWriter.CloseWithError(err)
+		return
+	}
+	_ = pipeWriter.Close()
 }
 
 func volcASRBillingUnits(durationMS int64) int {

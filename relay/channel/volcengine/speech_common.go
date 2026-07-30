@@ -80,12 +80,17 @@ func doVolcSpeechRequestURL(adaptor *Adaptor, c *gin.Context, info *relaycommon.
 	if err != nil {
 		return nil, fmt.Errorf("failed to build volcengine speech request: %w", err)
 	}
+	if sizedBody, ok := requestBody.(interface{ ContentLength() int64 }); ok {
+		request.ContentLength = sizedBody.ContentLength()
+	}
 	if err = adaptor.SetupRequestHeader(c, &request.Header, info); err != nil {
+		_ = request.Body.Close()
 		return nil, fmt.Errorf("failed to configure volcengine speech request: %w", err)
 	}
 
 	client, err := service.GetHttpClientWithProxy(info.ChannelSetting.Proxy)
 	if err != nil {
+		_ = request.Body.Close()
 		return nil, fmt.Errorf("failed to create volcengine speech client: %w", err)
 	}
 	response, err := client.Do(request)

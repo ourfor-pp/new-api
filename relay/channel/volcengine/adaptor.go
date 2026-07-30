@@ -76,7 +76,7 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 		if info.RelayMode != constant.RelayModeAudioTranscription {
 			return nil, errors.New("doubao-seed-asr-flash only supports audio transcriptions")
 		}
-		volcRequest, err := buildVolcASRFlashRequest(c, request)
+		requestBody, err := buildVolcASRFlashRequestBody(c, request)
 		if err != nil {
 			return nil, err
 		}
@@ -86,11 +86,7 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 			Protocol:   volcASRFlashProtocol,
 		}
 		setVolcSpeechAuditContext(c, info.VolcSpeechAudit)
-		jsonData, err := common.Marshal(volcRequest)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal volcengine ASR request: %w", err)
-		}
-		return bytes.NewReader(jsonData), nil
+		return requestBody, nil
 	}
 
 	if info.RelayMode != constant.RelayModeAudioSpeech {

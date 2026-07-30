@@ -3,6 +3,7 @@ package volcengine
 import (
 	"bytes"
 	"encoding/base64"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -37,12 +38,54 @@ func newASRMultipartContext(t *testing.T, filename string, audio []byte) *gin.Co
 
 func TestBuildVolcASRFlashRequestUsesValidatedFormatAndFixedModel(t *testing.T) {
 	context := newASRMultipartContext(t, "sample.opus", []byte("audio-data"))
-	request, err := buildVolcASRFlashRequest(context, dto.AudioRequest{LocalAudioFormat: "ogg"})
+	requestBody, err := buildVolcASRFlashRequestBody(context, dto.AudioRequest{LocalAudioFormat: "ogg"})
 	require.NoError(t, err)
+	payload, err := io.ReadAll(requestBody)
+	require.NoError(t, err)
+	require.NoError(t, requestBody.Close())
+	assert.Equal(t, int64(len(payload)), requestBody.ContentLength())
+
+	var request volcASRFlashRequest
+	require.NoError(t, common.Unmarshal(payload, &request))
 	assert.Equal(t, "ogg", request.Audio.Format)
 	assert.Equal(t, "bigmodel", request.Request.ModelName)
 	assert.Equal(t, base64.StdEncoding.EncodeToString([]byte("audio-data")), request.Audio.Data)
 	assert.True(t, request.Request.ShowUtterances)
+}
+
+func TestVolcASRFlashStreamingBodyUsesExactContentLength(t *testing.T) {
+	context := newASRMultipartContext(t, "sample.wav", []byte("audio-data"))
+	requestBody, err := buildVolcASRFlashRequestBody(context, dto.AudioRequest{LocalAudioFormat: "wav"})
+	require.NoError(t, err)
+
+	var receivedPayload []byte
+	var receivedContentLength int64
+	var receivedTransferEncoding []string
+	var readErr error
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		receivedContentLength = request.ContentLength
+		receivedTransferEncoding = append([]string(nil), request.TransferEncoding...)
+		receivedPayload, readErr = io.ReadAll(request.Body)
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	info := &relaycommon.RelayInfo{
+		OriginModelName: channelconstant.ModelDoubaoSeedASRFlash,
+		ChannelMeta:     &relaycommon.ChannelMeta{ApiKey: "new-console-key"},
+	}
+	response, err := doVolcSpeechRequestURL(&Adaptor{}, context, info, requestBody, server.URL)
+	require.NoError(t, err)
+	defer response.Body.Close()
+	require.NoError(t, readErr)
+
+	assert.Equal(t, int64(len(receivedPayload)), receivedContentLength)
+	assert.Equal(t, requestBody.ContentLength(), receivedContentLength)
+	assert.Empty(t, receivedTransferEncoding)
+	var request volcASRFlashRequest
+	require.NoError(t, common.Unmarshal(receivedPayload, &request))
+	assert.Equal(t, base64.StdEncoding.EncodeToString([]byte("audio-data")), request.Audio.Data)
 }
 
 func TestVolcASRFlashResponseUsesActualDurationAndVerboseSegments(t *testing.T) {

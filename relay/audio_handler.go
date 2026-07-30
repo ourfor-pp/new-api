@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/QuantumNous/new-api/common"
+	channelconstant "github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
@@ -69,7 +70,7 @@ func AudioHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 			newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)
 			// reset status code 重置状态码
 			service.ResetStatusCode(newAPIError, statusCodeMappingStr)
-			return newAPIError
+			return markVolcSpeechGatewayTimeoutRetry(info.OriginModelName, httpResp.StatusCode, newAPIError)
 		}
 	}
 
@@ -86,4 +87,14 @@ func AudioHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	}
 
 	return nil
+}
+
+func markVolcSpeechGatewayTimeoutRetry(modelName string, statusCode int, err *types.NewAPIError) *types.NewAPIError {
+	if err == nil || !channelconstant.IsVolcSpeechModel(modelName) {
+		return err
+	}
+	if statusCode != http.StatusGatewayTimeout && statusCode != 524 {
+		return err
+	}
+	return types.NewError(err, err.GetErrorCode(), types.ErrOptionWithForceRetry())
 }
