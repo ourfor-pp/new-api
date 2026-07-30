@@ -5215,6 +5215,9 @@
     "Zero retention": "Aucune rétention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Seed-TTS 2.0 default speaker ID": "Seed-TTS 2.0 default speaker ID",
+    "Enter a VolcEngine Seed-TTS 2.0 speaker ID": "Enter a VolcEngine Seed-TTS 2.0 speaker ID",
+    "Used when clients send an OpenAI standard voice such as alloy. A VolcEngine speaker ID sent by the client is passed through unchanged.": "Used when clients send an OpenAI standard voice such as alloy. A VolcEngine speaker ID sent by the client is passed through unchanged."
   }
 }

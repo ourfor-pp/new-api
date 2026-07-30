@@ -114,6 +114,26 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	appendBillingInfo(relayInfo, other)
 	appendParamOverrideInfo(relayInfo, other)
 	appendStreamStatus(relayInfo, other)
+	if audit := relayInfo.VolcSpeechAudit; audit != nil {
+		volcSpeech := map[string]interface{}{
+			"resource_id":   audit.ResourceID,
+			"protocol":      audit.Protocol,
+			"billing_units": audit.BillingUnits,
+		}
+		if audit.LogID != "" {
+			volcSpeech["log_id"] = audit.LogID
+		}
+		if audit.TextWords > 0 {
+			volcSpeech["text_words"] = audit.TextWords
+		}
+		if audit.AudioDurationMS > 0 {
+			volcSpeech["audio_duration_ms"] = audit.AudioDurationMS
+		}
+		if audit.PartialFailure {
+			volcSpeech["partial_failure"] = true
+		}
+		other["volc_speech"] = volcSpeech
+	}
 	return other
 }
 

@@ -168,6 +168,9 @@ type RelayInfo struct {
 	// It is surfaced onto the consume/task log's admin_info for auditing.
 	QuotaClamp *common.QuotaClamp
 
+	// VolcSpeechAudit 保存火山语音请求的非敏感审计信息。
+	VolcSpeechAudit *VolcSpeechAuditInfo
+
 	// TieredBillingSnapshot is a frozen snapshot of tiered billing rules
 	// captured at pre-consume time. Non-nil only when billing mode is "tiered_expr".
 	TieredBillingSnapshot *billingexpr.BillingSnapshot
@@ -191,6 +194,16 @@ type RelayInfo struct {
 	*ResponsesUsageInfo
 	*ChannelMeta
 	*TaskRelayInfo
+}
+
+type VolcSpeechAuditInfo struct {
+	ResourceID      string
+	Protocol        string
+	LogID           string
+	TextWords       int
+	AudioDurationMS int64
+	BillingUnits    int
+	PartialFailure  bool
 }
 
 func (info *RelayInfo) InitChannelMeta(c *gin.Context) {

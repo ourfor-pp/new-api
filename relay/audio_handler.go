@@ -53,6 +53,18 @@ func AudioHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	var httpResp *http.Response
 	if resp != nil {
 		httpResp = resp.(*http.Response)
+		if info.VolcSpeechAudit != nil {
+			info.VolcSpeechAudit.LogID = httpResp.Header.Get("X-Tt-Logid")
+			volcSpeechAudit := map[string]interface{}{
+				"resource_id":   info.VolcSpeechAudit.ResourceID,
+				"protocol":      info.VolcSpeechAudit.Protocol,
+				"billing_units": info.VolcSpeechAudit.BillingUnits,
+			}
+			if info.VolcSpeechAudit.LogID != "" {
+				volcSpeechAudit["log_id"] = info.VolcSpeechAudit.LogID
+			}
+			c.Set("volc_speech_audit", volcSpeechAudit)
+		}
 		if httpResp.StatusCode != http.StatusOK {
 			newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)
 			// reset status code 重置状态码

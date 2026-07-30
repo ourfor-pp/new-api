@@ -232,6 +232,7 @@ export const channelFormSchema = z
     vertex_key_type: z.enum(['json', 'api_key']).optional(), // Vertex AI specific
     aws_key_type: z.enum(['ak_sk', 'api_key']).optional(), // AWS specific
     azure_responses_version: z.string().optional(), // Azure specific
+    volc_speech_default_tts_speaker: z.string().optional(), // VolcEngine Seed-TTS 2.0
     // Field passthrough controls (stored in settings JSON)
     allow_service_tier: z.boolean().optional(), // OpenAI/Anthropic
     disable_store: z.boolean().optional(), // OpenAI only
@@ -382,6 +383,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   vertex_key_type: 'json',
   aws_key_type: 'ak_sk',
   azure_responses_version: '',
+  volc_speech_default_tts_speaker: '',
   // Field passthrough controls
   allow_service_tier: false,
   disable_store: false,
@@ -451,6 +453,7 @@ export function transformChannelToFormDefaults(
   let upstreamModelUpdateAutoSyncEnabled = false
   let upstreamModelUpdateIgnoredModels = ''
   let advancedCustom = ''
+  let volcSpeechDefaultTTSSpeaker = ''
 
   if (channel.settings) {
     try {
@@ -479,6 +482,8 @@ export function transformChannelToFormDefaults(
       if (parsed.advanced_custom) {
         advancedCustom = stringifyAdvancedCustomConfig(parsed.advanced_custom)
       }
+      volcSpeechDefaultTTSSpeaker =
+        parsed.volc_speech?.default_tts_speaker || ''
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error('Failed to parse channel settings:', error)
@@ -530,6 +535,7 @@ export function transformChannelToFormDefaults(
     upstream_model_update_auto_sync_enabled: upstreamModelUpdateAutoSyncEnabled,
     upstream_model_update_ignored_models: upstreamModelUpdateIgnoredModels,
     advanced_custom: advancedCustom,
+    volc_speech_default_tts_speaker: volcSpeechDefaultTTSSpeaker,
   }
 }
 
@@ -590,6 +596,17 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     settingsObj.aws_key_type = formData.aws_key_type || 'ak_sk'
   } else if ('aws_key_type' in settingsObj) {
     delete settingsObj.aws_key_type
+  }
+
+  if (
+    formData.type === 45 &&
+    formData.volc_speech_default_tts_speaker?.trim()
+  ) {
+    settingsObj.volc_speech = {
+      default_tts_speaker: formData.volc_speech_default_tts_speaker.trim(),
+    }
+  } else if ('volc_speech' in settingsObj) {
+    delete settingsObj.volc_speech
   }
 
   // Field passthrough controls:

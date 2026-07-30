@@ -26,6 +26,10 @@ type AudioRequest struct {
 	XVectorOnlyMode         json.RawMessage `json:"x_vector_only_mode,omitempty"`
 	MaxNewTokens            json.RawMessage `json:"max_new_tokens,omitempty"`
 	InitialCodecChunkFrames json.RawMessage `json:"initial_codec_chunk_frames,omitempty"`
+	// LocalAudioDurationMS 仅保存网关本地解析出的音频时长，不会发送给上游。
+	LocalAudioDurationMS int64 `json:"-"`
+	// LocalAudioFormat 仅保存经过校验的音频格式，不会发送给上游。
+	LocalAudioFormat string `json:"-"`
 	// TODO：ensure that the logic remains correct after the stream is started.
 	//Stream                  json.RawMessage `json:"stream,omitempty"`
 }
