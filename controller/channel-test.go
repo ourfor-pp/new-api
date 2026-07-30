@@ -3,11 +3,13 @@ package controller
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -109,6 +111,9 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 			}
 		}
 	}
+	if constant.IsVolcSpeechModel(testModel) {
+		isStream = false
+	}
 
 	endpointType = normalizeChannelTestEndpoint(channel, testModel, endpointType)
 
@@ -150,11 +155,30 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 			requestPath = "/v1/responses/compact"
 		}
 	}
+	switch testModel {
+	case constant.ModelDoubaoSeedTTS20:
+		requestPath = "/v1/audio/speech"
+	case constant.ModelDoubaoSeedASRFlash:
+		requestPath = "/v1/audio/transcriptions"
+	}
 	if strings.HasPrefix(requestPath, "/v1/responses/compact") {
 		testModel = ratio_setting.WithCompactModelSuffix(testModel)
 	}
 
-	c.Request = httptest.NewRequestWithContext(ctx, http.MethodPost, requestPath, nil)
+	var inboundBody io.Reader
+	contentType := "application/json"
+	if testModel == constant.ModelDoubaoSeedASRFlash {
+		body, multipartContentType, buildErr := buildVolcASRChannelTestBody(testModel)
+		if buildErr != nil {
+			return testResult{
+				context:  c,
+				localErr: buildErr,
+			}
+		}
+		inboundBody = bytes.NewReader(body)
+		contentType = multipartContentType
+	}
+	c.Request = httptest.NewRequestWithContext(ctx, http.MethodPost, requestPath, inboundBody)
 
 	cache, err := model.GetUserCache(testUserID)
 	if err != nil {
@@ -167,7 +191,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	c.Set("id", testUserID)
 
 	//c.Request.Header.Set("Authorization", "Bearer "+channel.Key)
-	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set("Content-Type", contentType)
 	c.Set("channel", channel.Type)
 	c.Set("base_url", channel.GetBaseURL())
 	group, _ := model.GetUserGroup(testUserID, false)
@@ -230,6 +254,12 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 		if strings.HasPrefix(c.Request.URL.Path, "/v1/responses/compact") {
 			relayFormat = types.RelayFormatOpenAIResponsesCompaction
 		}
+		if c.Request.URL.Path == "/v1/audio/speech" || c.Request.URL.Path == "/v1/audio/transcriptions" {
+			relayFormat = types.RelayFormatOpenAIAudio
+		}
+	}
+	if constant.IsVolcSpeechModel(testModel) {
+		relayFormat = types.RelayFormatOpenAIAudio
 	}
 
 	request := buildTestRequest(testModel, endpointType, channel, isStream)
@@ -370,6 +400,16 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 				newAPIError: types.NewError(errors.New("invalid response compaction request type"), types.ErrorCodeConvertRequestFailed),
 			}
 		}
+	case relayconstant.RelayModeAudioSpeech, relayconstant.RelayModeAudioTranscription:
+		if audioReq, ok := request.(*dto.AudioRequest); ok {
+			convertedRequest, err = adaptor.ConvertAudioRequest(c, info, *audioReq)
+		} else {
+			return testResult{
+				context:     c,
+				localErr:    errors.New("invalid audio request type"),
+				newAPIError: types.NewError(errors.New("invalid audio request type"), types.ErrorCodeConvertRequestFailed),
+			}
+		}
 	default:
 		// Chat/Completion 等其他请求类型
 		if generalReq, ok := request.(*dto.GeneralOpenAIRequest); ok {
@@ -390,26 +430,31 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 			newAPIError: types.NewError(err, types.ErrorCodeConvertRequestFailed),
 		}
 	}
-	jsonData, err := common.Marshal(convertedRequest)
-	if err != nil {
+	var requestBody io.Reader
+	isAudioRelay := info.RelayMode == relayconstant.RelayModeAudioSpeech ||
+		info.RelayMode == relayconstant.RelayModeAudioTranscription
+	if reader, ok := convertedRequest.(io.Reader); isAudioRelay && ok {
+		requestBody = reader
+	} else if isAudioRelay {
+		err = errors.New("invalid converted audio request type")
 		return testResult{
 			context:     c,
 			localErr:    err,
-			newAPIError: types.NewError(err, types.ErrorCodeJsonMarshalFailed),
+			newAPIError: types.NewError(err, types.ErrorCodeConvertRequestFailed),
 		}
-	}
+	} else {
+		jsonData, marshalErr := common.Marshal(convertedRequest)
+		if marshalErr != nil {
+			return testResult{
+				context:     c,
+				localErr:    marshalErr,
+				newAPIError: types.NewError(marshalErr, types.ErrorCodeJsonMarshalFailed),
+			}
+		}
 
-	//jsonData, err = relaycommon.RemoveDisabledFields(jsonData, info.ChannelOtherSettings)
-	//if err != nil {
-	//	return testResult{
-	//		context:     c,
-	//		localErr:    err,
-	//		newAPIError: types.NewError(err, types.ErrorCodeConvertRequestFailed),
-	//	}
-	//}
-
-	if len(info.ParamOverride) > 0 {
-		jsonData, err = relaycommon.ApplyParamOverrideWithRelayInfo(jsonData, info)
+		if len(info.ParamOverride) > 0 {
+			jsonData, err = relaycommon.ApplyParamOverrideWithRelayInfo(jsonData, info)
+		}
 		if err != nil {
 			if fixedErr, ok := relaycommon.AsParamOverrideReturnError(err); ok {
 				return testResult{
@@ -424,10 +469,10 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 				newAPIError: types.NewError(err, types.ErrorCodeChannelParamOverrideInvalid),
 			}
 		}
+		requestBody = bytes.NewReader(jsonData)
+		c.Request.Body = io.NopCloser(bytes.NewReader(jsonData))
 	}
 
-	requestBody := bytes.NewBuffer(jsonData)
-	c.Request.Body = io.NopCloser(bytes.NewBuffer(jsonData))
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
 		return testResult{
@@ -510,7 +555,11 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 		Group:            info.UsingGroup,
 		Other:            other,
 	})
-	common.SysLog(fmt.Sprintf("testing channel #%d, response: \n%s", channel.Id, string(respBody)))
+	if info.RelayMode == relayconstant.RelayModeAudioSpeech {
+		common.SysLog(fmt.Sprintf("testing channel #%d, audio response bytes: %d", channel.Id, len(respBody)))
+	} else {
+		common.SysLog(fmt.Sprintf("testing channel #%d, response: \n%s", channel.Id, string(respBody)))
+	}
 	return testResult{
 		context:     c,
 		localErr:    nil,
@@ -692,8 +741,69 @@ func detectErrorMessageFromJSONBytes(jsonBytes []byte) string {
 	return message
 }
 
+func buildVolcASRChannelTestBody(modelName string) ([]byte, string, error) {
+	const (
+		sampleRate    = 16000
+		bitsPerSample = 16
+		channels      = 1
+		durationMS    = 200
+	)
+	audioDataSize := sampleRate * durationMS / 1000 * channels * bitsPerSample / 8
+	wav := make([]byte, 44+audioDataSize)
+	copy(wav[0:4], "RIFF")
+	binary.LittleEndian.PutUint32(wav[4:8], uint32(len(wav)-8))
+	copy(wav[8:12], "WAVE")
+	copy(wav[12:16], "fmt ")
+	binary.LittleEndian.PutUint32(wav[16:20], 16)
+	binary.LittleEndian.PutUint16(wav[20:22], 1)
+	binary.LittleEndian.PutUint16(wav[22:24], channels)
+	binary.LittleEndian.PutUint32(wav[24:28], sampleRate)
+	binary.LittleEndian.PutUint32(wav[28:32], sampleRate*channels*bitsPerSample/8)
+	binary.LittleEndian.PutUint16(wav[32:34], channels*bitsPerSample/8)
+	binary.LittleEndian.PutUint16(wav[34:36], bitsPerSample)
+	copy(wav[36:40], "data")
+	binary.LittleEndian.PutUint32(wav[40:44], uint32(audioDataSize))
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", "channel-test.wav")
+	if err != nil {
+		return nil, "", err
+	}
+	if _, err = part.Write(wav); err != nil {
+		return nil, "", err
+	}
+	if err = writer.WriteField("model", modelName); err != nil {
+		return nil, "", err
+	}
+	if err = writer.WriteField("response_format", "json"); err != nil {
+		return nil, "", err
+	}
+	if err = writer.Close(); err != nil {
+		return nil, "", err
+	}
+	return body.Bytes(), writer.FormDataContentType(), nil
+}
+
 func buildTestRequest(model string, endpointType string, channel *model.Channel, isStream bool) dto.Request {
 	testResponsesInput := json.RawMessage(`[{"role":"user","content":"hi"}]`)
+
+	switch model {
+	case constant.ModelDoubaoSeedTTS20:
+		return &dto.AudioRequest{
+			Model:          model,
+			Input:          "你好",
+			Voice:          "alloy",
+			ResponseFormat: "mp3",
+		}
+	case constant.ModelDoubaoSeedASRFlash:
+		return &dto.AudioRequest{
+			Model:                model,
+			ResponseFormat:       "json",
+			LocalAudioDurationMS: 200,
+			LocalAudioFormat:     "wav",
+		}
+	}
 
 	// 根据端点类型构建不同的测试请求
 	if endpointType != "" {

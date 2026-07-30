@@ -257,10 +257,6 @@ func ParseMultipartFormReusable(c *gin.Context) (*multipart.Form, error) {
 	if err != nil {
 		return nil, err
 	}
-	requestBody, err := storage.Bytes()
-	if err != nil {
-		return nil, err
-	}
 
 	// Use the original Content-Type saved on first call to avoid boundary
 	// mismatch when callers overwrite c.Request.Header after multipart rebuild.
@@ -276,17 +272,23 @@ func ParseMultipartFormReusable(c *gin.Context) (*multipart.Form, error) {
 		return nil, err
 	}
 
-	reader := multipart.NewReader(bytes.NewReader(requestBody), boundary)
-	form, err := reader.ReadForm(multipartMemoryLimit())
-	if err != nil {
+	if _, err = storage.Seek(0, io.SeekStart); err != nil {
 		return nil, err
 	}
+	reader := multipart.NewReader(ReaderOnly(storage), boundary)
+	form, err := reader.ReadForm(multipartMemoryLimit())
 
 	// Reset request body
 	if _, seekErr := storage.Seek(0, io.SeekStart); seekErr != nil {
 		return nil, seekErr
 	}
 	c.Request.Body = io.NopCloser(storage)
+	if err != nil {
+		if form != nil {
+			_ = form.RemoveAll()
+		}
+		return nil, err
+	}
 	return form, nil
 }
 

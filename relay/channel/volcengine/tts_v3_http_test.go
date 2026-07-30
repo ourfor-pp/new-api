@@ -38,6 +38,19 @@ func newVolcSpeechTestContext() (*gin.Context, *httptest.ResponseRecorder) {
 	return context, recorder
 }
 
+type partialWriteRecorder struct {
+	*httptest.ResponseRecorder
+	maxBytes int
+}
+
+func (r *partialWriteRecorder) Write(payload []byte) (int, error) {
+	if len(payload) > r.maxBytes {
+		payload = payload[:r.maxBytes]
+	}
+	written, _ := r.ResponseRecorder.Write(payload)
+	return written, io.ErrClosedPipe
+}
+
 func TestBuildVolcTTSV3RequestMapsOnlyStandardVoices(t *testing.T) {
 	speed := 1.25
 	request, encoding, err := buildVolcTTSV3Request(dto.AudioRequest{
@@ -176,6 +189,30 @@ func TestVolcTTSV3ClientWriteFailureMarksPartialFailure(t *testing.T) {
 	apiErr := volcTTSStreamError(context, info, true, io.ErrClosedPipe, 499)
 	assert.True(t, types.IsSkipRetryError(apiErr))
 	assert.True(t, info.VolcSpeechAudit.PartialFailure)
+}
+
+func TestVolcTTSV3FirstPartialWriteIsNotRetryable(t *testing.T) {
+	stream := buildVolcV3TestFrame(t, MsgTypeAudioOnlyServer, EventType_TTSResponse, []byte("partial-audio"))
+	recorder := &partialWriteRecorder{
+		ResponseRecorder: httptest.NewRecorder(),
+		maxBytes:         4,
+	}
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodPost, "/v1/audio/speech", nil)
+	info := &relaycommon.RelayInfo{
+		Request:         &dto.AudioRequest{Input: "测试"},
+		OriginModelName: channelconstant.ModelDoubaoSeedTTS20,
+		VolcSpeechAudit: &relaycommon.VolcSpeechAuditInfo{ResourceID: volcTTSResourceID, Protocol: volcTTSProtocol},
+	}
+	response := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader(stream))}
+
+	usage, apiErr := handleVolcTTSV3Response(context, response, info, "mp3")
+
+	assert.Nil(t, usage)
+	require.NotNil(t, apiErr)
+	assert.True(t, types.IsSkipRetryError(apiErr))
+	assert.True(t, info.VolcSpeechAudit.PartialFailure)
+	assert.Equal(t, "part", recorder.Body.String())
 }
 
 func TestVolcSpeechModelRoutesDoNotChangeLegacyTTSURL(t *testing.T) {

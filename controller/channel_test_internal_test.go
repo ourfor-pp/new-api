@@ -3,6 +3,7 @@ package controller
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -236,6 +237,54 @@ func TestSelectChannelsForAutomaticTestScheduledSkipsManualDisabled(t *testing.T
 	require.Len(t, selected, 2)
 	require.Equal(t, 1, selected[0].Id)
 	require.Equal(t, 2, selected[1].Id)
+}
+
+func TestBuildVolcSpeechChannelTestRequests(t *testing.T) {
+	ttsRequest, ok := buildTestRequest(constant.ModelDoubaoSeedTTS20, "", nil, false).(*dto.AudioRequest)
+	require.True(t, ok)
+	assert.Equal(t, "alloy", ttsRequest.Voice)
+	assert.Equal(t, "mp3", ttsRequest.ResponseFormat)
+	assert.NotEmpty(t, ttsRequest.Input)
+
+	asrRequest, ok := buildTestRequest(constant.ModelDoubaoSeedASRFlash, "", nil, false).(*dto.AudioRequest)
+	require.True(t, ok)
+	assert.Equal(t, "wav", asrRequest.LocalAudioFormat)
+	assert.Equal(t, int64(200), asrRequest.LocalAudioDurationMS)
+
+	body, contentType, err := buildVolcASRChannelTestBody(constant.ModelDoubaoSeedASRFlash)
+	require.NoError(t, err)
+	request := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", bytes.NewReader(body))
+	request.Header.Set("Content-Type", contentType)
+	require.NoError(t, request.ParseMultipartForm(1<<20))
+	file, _, err := request.FormFile("file")
+	require.NoError(t, err)
+	defer file.Close()
+	wav, err := io.ReadAll(file)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(wav), 44)
+	assert.Equal(t, "RIFF", string(wav[:4]))
+	assert.Equal(t, "WAVE", string(wav[8:12]))
+	assert.Equal(t, constant.ModelDoubaoSeedASRFlash, request.FormValue("model"))
+}
+
+func TestShouldRetryHonorsForceRetryWithoutChangingDefaultGatewayTimeout(t *testing.T) {
+	context, _ := gin.CreateTestContext(httptest.NewRecorder())
+	context.Request = httptest.NewRequest(http.MethodPost, "/v1/audio/speech", nil)
+
+	defaultError := types.NewErrorWithStatusCode(fmt.Errorf("gateway timeout"), types.ErrorCodeBadResponse, http.StatusGatewayTimeout)
+	assert.False(t, shouldRetry(context, defaultError, 1))
+
+	forcedError := types.NewErrorWithStatusCode(
+		fmt.Errorf("gateway timeout"),
+		types.ErrorCodeBadResponse,
+		http.StatusGatewayTimeout,
+		types.ErrOptionWithForceRetry(),
+	)
+	assert.True(t, shouldRetry(context, forcedError, 1))
+	assert.False(t, shouldRetry(context, forcedError, 0))
+
+	context.Set("specific_channel_id", 1)
+	assert.False(t, shouldRetry(context, forcedError, 1))
 }
 
 func TestTestAllChannelsRejectsExistingActiveTask(t *testing.T) {
