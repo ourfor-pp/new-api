@@ -5215,6 +5215,9 @@
     "Zero retention": "零數據保留",
     "Zhipu": "智譜",
     "Zhipu V4": "智譜 V4",
-    "Zoom": "縮放"
+    "Zoom": "縮放",
+    "Seed-TTS 2.0 default speaker ID": "Seed-TTS 2.0 預設音色 ID",
+    "Enter a VolcEngine Seed-TTS 2.0 speaker ID": "請輸入火山 Seed-TTS 2.0 音色 ID",
+    "Used when clients send an OpenAI standard voice such as alloy. A VolcEngine speaker ID sent by the client is passed through unchanged.": "用戶端傳 alloy 等 OpenAI 標準音色時使用；用戶端直接傳火山音色 ID 時將保持原值透傳。"
   }
 }
