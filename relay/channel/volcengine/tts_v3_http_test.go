@@ -2,6 +2,7 @@ package volcengine
 
 import (
 	"bytes"
+	"encoding/binary"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -79,6 +80,8 @@ func TestBuildVolcTTSV3RequestMapsOnlyStandardVoices(t *testing.T) {
 		Voice: "alloy",
 	}, nil)
 	require.ErrorContains(t, err, "default_tts_speaker")
+	channelConfigErr := types.NewError(err, types.ErrorCodeConvertRequestFailed)
+	assert.True(t, types.IsChannelError(channelConfigErr))
 }
 
 func TestVolcTTSV3ValidationRejectsUnsupportedFormatAndSpeed(t *testing.T) {
@@ -213,6 +216,21 @@ func TestVolcTTSV3FirstPartialWriteIsNotRetryable(t *testing.T) {
 	assert.True(t, types.IsSkipRetryError(apiErr))
 	assert.True(t, info.VolcSpeechAudit.PartialFailure)
 	assert.Equal(t, "part", recorder.Body.String())
+}
+
+func TestVolcTTSV3RejectsOversizedFrameBeforeReadingPayload(t *testing.T) {
+	frame := []byte{
+		0x11,
+		byte(MsgTypeAudioOnlyServer << 4),
+		byte(SerializationJSON << 4),
+		0,
+	}
+	size := make([]byte, 4)
+	binary.BigEndian.PutUint32(size, uint32(volcTTSMaxFrameBytes+1))
+	frame = append(frame, size...)
+
+	_, err := readVolcTTSV3Frame(bytes.NewReader(frame))
+	require.ErrorContains(t, err, "frame exceeds")
 }
 
 func TestVolcSpeechModelRoutesDoNotChangeLegacyTTSURL(t *testing.T) {

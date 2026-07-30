@@ -50,6 +50,12 @@ func TestParseMultipartFormReusableStreamsBodyStorage(t *testing.T) {
 	storage := &multipartStreamingStorage{Reader: bytes.NewReader(body.Bytes())}
 	context.Set(KeyBodyStorage, storage)
 
+	var request struct {
+		Model string `json:"model"`
+	}
+	require.NoError(t, UnmarshalBodyReusable(context, &request))
+	assert.Equal(t, "doubao-seed-asr-flash", request.Model)
+
 	form, err := ParseMultipartFormReusable(context)
 	require.NoError(t, err)
 	defer form.RemoveAll()
@@ -65,4 +71,34 @@ func TestParseMultipartFormReusableStreamsBodyStorage(t *testing.T) {
 	replayed, err := io.ReadAll(context.Request.Body)
 	require.NoError(t, err)
 	assert.Equal(t, body.Bytes(), replayed)
+}
+
+func TestLargeTranscriptionMultipartUsesDiskWithoutGlobalDiskCache(t *testing.T) {
+	originalConfig := GetDiskCacheConfig()
+	SetDiskCacheConfig(DiskCacheConfig{
+		Enabled:     false,
+		ThresholdMB: 1,
+		MaxSizeMB:   1024,
+		Path:        t.TempDir(),
+	})
+	defer SetDiskCacheConfig(originalConfig)
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	require.NoError(t, writer.WriteField("model", "doubao-seed-asr-flash"))
+	part, err := writer.CreateFormFile("file", "sample.wav")
+	require.NoError(t, err)
+	_, err = part.Write(bytes.Repeat([]byte{0}, 1<<20))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	context, _ := gin.CreateTestContext(httptest.NewRecorder())
+	context.Request = httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", bytes.NewReader(body.Bytes()))
+	context.Request.Header.Set("Content-Type", writer.FormDataContentType())
+
+	storage, err := GetBodyStorage(context)
+	require.NoError(t, err)
+	defer CleanupBodyStorage(context)
+	assert.True(t, storage.IsDisk())
+	assert.Equal(t, int64(body.Len()), storage.Size())
 }

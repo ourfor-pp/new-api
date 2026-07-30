@@ -185,7 +185,14 @@ func handleVolcASRFlashResponse(c *gin.Context, resp *http.Response, info *relay
 	}
 
 	statusCode := strings.TrimSpace(resp.Header.Get("X-Api-Status-Code"))
-	if statusCode != "" && statusCode != "20000000" && statusCode != "20000003" {
+	if statusCode == "" {
+		return nil, types.NewErrorWithStatusCode(
+			errors.New("volcengine ASR response missing X-Api-Status-Code"),
+			types.ErrorCodeBadResponse,
+			http.StatusBadGateway,
+		)
+	}
+	if statusCode != "20000000" && statusCode != "20000003" {
 		message := strings.TrimSpace(resp.Header.Get("X-Api-Message"))
 		code := 0
 		_, _ = fmt.Sscanf(statusCode, "%d", &code)
@@ -198,7 +205,7 @@ func handleVolcASRFlashResponse(c *gin.Context, resp *http.Response, info *relay
 
 	var result volcASRFlashResponse
 	if err = common.Unmarshal(body, &result); err != nil {
-		return nil, types.NewErrorWithStatusCode(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+		return nil, types.NewErrorWithStatusCode(err, types.ErrorCodeBadResponse, http.StatusBadGateway)
 	}
 	transcript := ""
 	if result.Result != nil {
@@ -214,11 +221,11 @@ func handleVolcASRFlashResponse(c *gin.Context, resp *http.Response, info *relay
 		}
 	}
 	if durationMS > 2*60*60*1000 {
-		return nil, types.NewErrorWithStatusCode(errors.New("volcengine ASR returned duration above 2 hours"), types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+		return nil, types.NewErrorWithStatusCode(errors.New("volcengine ASR returned duration above 2 hours"), types.ErrorCodeBadResponse, http.StatusBadGateway)
 	}
 	billingUnits := volcASRBillingUnits(durationMS)
 	if billingUnits <= 0 {
-		return nil, types.NewErrorWithStatusCode(errors.New("volcengine ASR returned no billable duration"), types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+		return nil, types.NewErrorWithStatusCode(errors.New("volcengine ASR returned no billable duration"), types.ErrorCodeBadResponse, http.StatusBadGateway)
 	}
 
 	switch strings.ToLower(responseFormat) {

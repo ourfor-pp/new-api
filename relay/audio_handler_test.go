@@ -29,3 +29,14 @@ func TestMarkVolcSpeechGatewayTimeoutRetry(t *testing.T) {
 	otherStatusError := types.NewErrorWithStatusCode(errors.New("server error"), types.ErrorCodeBadResponse, http.StatusInternalServerError)
 	assert.False(t, types.IsForceRetryError(markVolcSpeechGatewayTimeoutRetry(constant.ModelDoubaoSeedTTS20, http.StatusInternalServerError, otherStatusError)))
 }
+
+func TestNewAudioConvertErrorKeepsChannelFailureRetryable(t *testing.T) {
+	channelConfigErr := types.NewError(errors.New("channel config invalid"), types.ErrorCodeChannelConfigInvalid)
+	result := newAudioConvertError(channelConfigErr)
+	assert.True(t, types.IsChannelError(result))
+	assert.False(t, types.IsSkipRetryError(result))
+
+	requestErr := newAudioConvertError(errors.New("request format invalid"))
+	assert.False(t, types.IsChannelError(requestErr))
+	assert.True(t, types.IsSkipRetryError(requestErr))
+}

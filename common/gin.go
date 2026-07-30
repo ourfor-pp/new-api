@@ -66,7 +66,13 @@ func GetRequestBody(c *gin.Context) (io.Seeker, error) {
 	contentLength := c.Request.ContentLength
 
 	// 使用新的存储系统
-	storage, err := CreateBodyStorageFromReader(c.Request.Body, contentLength, maxBytes)
+	var storage BodyStorage
+	var err error
+	if shouldSpoolTranscriptionMultipartToDisk(c, contentLength) {
+		storage, err = CreateDiskBodyStorageFromReader(c.Request.Body, maxBytes)
+	} else {
+		storage, err = CreateBodyStorageFromReader(c.Request.Body, contentLength, maxBytes)
+	}
 	_ = c.Request.Body.Close()
 
 	if err != nil {
@@ -80,6 +86,24 @@ func GetRequestBody(c *gin.Context) (io.Seeker, error) {
 	c.Set(KeyBodyStorage, storage)
 
 	return storage, nil
+}
+
+func shouldSpoolTranscriptionMultipartToDisk(c *gin.Context, contentLength int64) bool {
+	if c == nil || c.Request == nil || c.Request.URL == nil {
+		return false
+	}
+	if c.Request.URL.Path != "/v1/audio/transcriptions" {
+		return false
+	}
+	if !strings.Contains(c.Request.Header.Get("Content-Type"), gin.MIMEMultipartPOSTForm) {
+		return false
+	}
+	threshold := GetDiskCacheThresholdBytes()
+	multipartLimit := multipartMemoryLimit()
+	if threshold <= 0 || threshold > multipartLimit {
+		threshold = multipartLimit
+	}
+	return contentLength <= 0 || contentLength >= threshold
 }
 
 // GetBodyStorage 获取请求体存储对象（用于需要多次读取的场景）
@@ -128,6 +152,22 @@ func UnmarshalBodyReusable(c *gin.Context, v any) error {
 		c.Request.Body = io.NopCloser(storage)
 		return nil
 	}
+	if strings.Contains(contentType, gin.MIMEMultipartPOSTForm) {
+		form, formErr := ParseMultipartFormReusable(c)
+		if formErr != nil {
+			return formErr
+		}
+		defer form.RemoveAll()
+		formMap := make(map[string]any, len(form.Value))
+		for key, values := range form.Value {
+			if len(values) == 1 {
+				formMap[key] = values[0]
+			} else {
+				formMap[key] = values
+			}
+		}
+		return processFormMap(formMap, v)
+	}
 
 	requestBody, err := storage.Bytes()
 	if err != nil {
@@ -137,8 +177,6 @@ func UnmarshalBodyReusable(c *gin.Context, v any) error {
 		err = Unmarshal(requestBody, v)
 	} else if strings.Contains(contentType, gin.MIMEPOSTForm) {
 		err = parseFormData(requestBody, v)
-	} else if strings.Contains(contentType, gin.MIMEMultipartPOSTForm) {
-		err = parseMultipartFormData(c, requestBody, v)
 	} else {
 		// skip for now
 		// TODO: someday non json request have variant model, we will need to implementation this

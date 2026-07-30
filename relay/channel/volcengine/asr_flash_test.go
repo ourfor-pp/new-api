@@ -13,6 +13,7 @@ import (
 	channelconstant "github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -182,6 +183,46 @@ func TestVolcASRFlashTextResponseAndProviderFailure(t *testing.T) {
 	_, apiErr = handleVolcASRFlashResponse(context, failed, info, "json")
 	require.NotNil(t, apiErr)
 	assert.Equal(t, http.StatusBadGateway, apiErr.StatusCode)
+}
+
+func TestVolcASRFlashMalformedSuccessResponseRemainsRetryable(t *testing.T) {
+	tests := []struct {
+		name   string
+		header http.Header
+		body   []byte
+	}{
+		{
+			name:   "缺少状态响应头",
+			header: http.Header{},
+			body:   []byte(`{"audio_info":{"duration":1000}}`),
+		},
+		{
+			name:   "响应 JSON 损坏",
+			header: http.Header{"X-Api-Status-Code": []string{"20000000"}},
+			body:   []byte(`{"audio_info":`),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			context, _ := newVolcSpeechTestContext()
+			info := &relaycommon.RelayInfo{
+				Request:         &dto.AudioRequest{LocalAudioDurationMS: 1000},
+				VolcSpeechAudit: &relaycommon.VolcSpeechAuditInfo{ResourceID: volcASRFlashResourceID, Protocol: volcASRFlashProtocol},
+			}
+			response := &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     test.header,
+				Body:       ioNopCloser(test.body),
+			}
+
+			_, apiErr := handleVolcASRFlashResponse(context, response, info, "json")
+			require.NotNil(t, apiErr)
+			assert.Equal(t, types.ErrorCodeBadResponse, apiErr.GetErrorCode())
+			assert.False(t, types.IsSkipRetryError(apiErr))
+			assert.Equal(t, http.StatusBadGateway, apiErr.StatusCode)
+		})
+	}
 }
 
 func ioNopCloser(data []byte) *readCloser {

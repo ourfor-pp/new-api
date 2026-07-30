@@ -1,9 +1,14 @@
 package volcengine
 
 import (
+	"errors"
 	"net/http"
 	"testing"
 
+	channelconstant "github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -69,6 +74,27 @@ func TestBuildVolcSpeechHeadersRejectsMalformedCredential(t *testing.T) {
 			assert.Nil(t, headers)
 		})
 	}
+}
+
+func TestVolcSpeechInvalidCredentialIsChannelFailure(t *testing.T) {
+	context, _ := newVolcSpeechTestContext()
+	info := &relaycommon.RelayInfo{
+		OriginModelName: channelconstant.ModelDoubaoSeedTTS20,
+		ChannelMeta:     &relaycommon.ChannelMeta{ApiKey: ""},
+	}
+
+	_, err := (&Adaptor{}).ConvertAudioRequest(context, info, dto.AudioRequest{
+		Input:          "测试",
+		Voice:          "S_seed_special",
+		ResponseFormat: "mp3",
+	})
+	require.Error(t, err)
+
+	var apiErr *types.NewAPIError
+	require.True(t, errors.As(err, &apiErr))
+	assert.Equal(t, types.ErrorCodeChannelInvalidKey, apiErr.GetErrorCode())
+	assert.True(t, types.IsChannelError(apiErr))
+	assert.False(t, types.IsSkipRetryError(apiErr))
 }
 
 func TestVolcSpeechProviderStatusPreservesRetryableFailures(t *testing.T) {

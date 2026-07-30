@@ -302,6 +302,17 @@ func CreateBodyStorageFromReader(reader io.Reader, contentLength int64, maxBytes
 	return storage, nil
 }
 
+// CreateDiskBodyStorageFromReader 将需要可重放的大请求直接写入临时文件。
+// 该路径用于即使未开启通用磁盘缓存也不能安全驻留内存的请求。
+func CreateDiskBodyStorageFromReader(reader io.Reader, maxBytes int64) (BodyStorage, error) {
+	storage, err := newDiskStorageFromReader(reader, maxBytes, GetDiskCachePath())
+	if err != nil {
+		return nil, err
+	}
+	IncrementDiskCacheHits()
+	return storage, nil
+}
+
 // ReaderOnly wraps an io.Reader to hide io.Closer, preventing http.NewRequest
 // from type-asserting io.ReadCloser and closing the underlying BodyStorage.
 func ReaderOnly(r io.Reader) io.Reader {

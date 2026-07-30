@@ -50,7 +50,7 @@ func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayIn
 func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.AudioRequest) (io.Reader, error) {
 	if info.OriginModelName == channelconstant.ModelDoubaoSeedTTS20 {
 		if _, _, _, err := parseVolcSpeechCredential(info.ApiKey); err != nil {
-			return nil, err
+			return nil, types.NewError(err, types.ErrorCodeChannelInvalidKey)
 		}
 		volcRequest, encoding, err := buildVolcTTSV3Request(request, info.ChannelOtherSettings.VolcSpeech)
 		if err != nil {
@@ -71,7 +71,7 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 
 	if info.OriginModelName == channelconstant.ModelDoubaoSeedASRFlash {
 		if _, _, _, err := parseVolcSpeechCredential(info.ApiKey); err != nil {
-			return nil, err
+			return nil, types.NewError(err, types.ErrorCodeChannelInvalidKey)
 		}
 		if info.RelayMode != constant.RelayModeAudioTranscription {
 			return nil, errors.New("doubao-seed-asr-flash only supports audio transcriptions")

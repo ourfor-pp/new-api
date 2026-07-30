@@ -50,13 +50,18 @@ type volcTTSV3Usage struct {
 	TextWords int `json:"text_words"`
 }
 
+const volcTTSMaxFrameBytes = 16 << 20
+
 func resolveVolcTTSSpeaker(voice string, config *dto.VolcSpeechConfig) (string, error) {
 	voice = strings.TrimSpace(voice)
 	if _, standard := openAIToVolcengineVoiceMap[strings.ToLower(voice)]; !standard {
 		return voice, nil
 	}
 	if config == nil || strings.TrimSpace(config.DefaultTTSSpeaker) == "" {
-		return "", errors.New("OpenAI standard voice requires volc_speech.default_tts_speaker on the channel")
+		return "", types.NewError(
+			errors.New("OpenAI standard voice requires volc_speech.default_tts_speaker on the channel"),
+			types.ErrorCodeChannelConfigInvalid,
+		)
 	}
 	return strings.TrimSpace(config.DefaultTTSSpeaker), nil
 }
@@ -175,8 +180,12 @@ func copyVolcLengthPrefixed(reader io.Reader, destination *bytes.Buffer) error {
 	if _, err := io.ReadFull(reader, sizeBytes); err != nil {
 		return err
 	}
-	destination.Write(sizeBytes)
 	size := uint32(sizeBytes[0])<<24 | uint32(sizeBytes[1])<<16 | uint32(sizeBytes[2])<<8 | uint32(sizeBytes[3])
+	frameSize := uint64(destination.Len()) + uint64(len(sizeBytes)) + uint64(size)
+	if frameSize > volcTTSMaxFrameBytes {
+		return fmt.Errorf("volcengine v3 frame exceeds %d bytes", volcTTSMaxFrameBytes)
+	}
+	destination.Write(sizeBytes)
 	if size == 0 {
 		return nil
 	}

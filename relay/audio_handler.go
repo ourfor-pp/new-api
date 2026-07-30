@@ -42,7 +42,7 @@ func AudioHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 
 	ioReader, err := adaptor.ConvertAudioRequest(c, info, *request)
 	if err != nil {
-		return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		return newAudioConvertError(err)
 	}
 
 	resp, err := adaptor.DoRequest(c, info, ioReader)
@@ -87,6 +87,14 @@ func AudioHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	}
 
 	return nil
+}
+
+func newAudioConvertError(err error) *types.NewAPIError {
+	newAPIError := types.NewError(err, types.ErrorCodeConvertRequestFailed)
+	if types.IsChannelError(newAPIError) {
+		return newAPIError
+	}
+	return types.NewError(newAPIError, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 }
 
 func markVolcSpeechGatewayTimeoutRetry(modelName string, statusCode int, err *types.NewAPIError) *types.NewAPIError {
