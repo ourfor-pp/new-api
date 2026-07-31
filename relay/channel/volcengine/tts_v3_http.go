@@ -621,10 +621,9 @@ func handleVolcTTSV3Response(c *gin.Context, resp *http.Response, info *relaycom
 	}
 
 	logger.LogInfo(c, fmt.Sprintf(
-		"火山语音请求完成: model=%s resource_id=%s protocol=%s log_id=%s text_words=%d billing_units=%d timestamp_granularities=%v subtitle_formats=%v speech_options=%v context_text_count=%d subtitle_sentence_count=%d subtitle_word_count=%d usage_source=%s",
+		"火山语音请求完成: model=%s resource_id=%s protocol=%s log_id=%s text_words=%d billing_units=%d timestamp_granularities=%v subtitle_formats=%v subtitle_sentence_count=%d subtitle_word_count=%d usage_source=%s",
 		info.OriginModelName, volcTTSResourceID, volcTTSProtocol, info.VolcSpeechAudit.LogID, textWords, textWords,
 		info.VolcSpeechAudit.TimestampGranularities, info.VolcSpeechAudit.SubtitleFormats,
-		info.VolcSpeechAudit.SpeechOptions, info.VolcSpeechAudit.ContextTextCount,
 		info.VolcSpeechAudit.SubtitleSentenceCount, info.VolcSpeechAudit.SubtitleWordCount, usageSource,
 	))
 	return &dto.Usage{PromptTokens: textWords, TotalTokens: textWords}, nil
