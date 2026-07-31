@@ -16,6 +16,8 @@ description: 开发、审查和验证 new-api 的火山语音适配。用于 See
 
 - 始终使用 `EffectiveUpstreamModelName()` 或等价映射结果识别上游模型，禁止在适配器写死 `sxh-tts`、`sxh-asr`。
 - 协议、资源 ID 和鉴权头由服务端决定，不接受客户端 metadata 覆盖。
+- 厂商中立扩展统一使用 `speech_options`；TTS JSON 传对象，ASR multipart 传且只传一个 JSON 字符串。未知字段、当前操作不适用字段和当前资源未验证字段必须返回 `400`，不得静默忽略或提供任意上游透传。
+- 请求 DTO 的可选布尔和数值字段使用指针，保留显式 `false` 和 `0`；无效的显式值应明确报错，不能因 `omitempty` 被当成未传。
 - 单段 Key 与 `appid|access_token` 两种鉴权保持兼容，不记录凭据。
 - 普通裸音频路径必须保持兼容；字幕扩展只在显式请求时启用。
 - 首字节前允许符合规则的渠道重试；输出后必须禁止切换，标记部分流失败并退回预扣。
@@ -40,7 +42,7 @@ description: 开发、审查和验证 new-api 的火山语音适配。用于 See
 
 ```bash
 go test -timeout 10m ./...
-go test -race ./relay/channel/volcengine ./relay/helper -run 'Volc|Mapped'
+go test -race ./relay/channel/volcengine ./relay/helper -run 'Volc|Mapped|SpeechOptions'
 git diff --check
 ```
 

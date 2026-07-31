@@ -69,6 +69,8 @@ Authorization: Bearer <NEW_API_TOKEN>
 | `voice` | string | 是 | 建议传 `alloy`，使用渠道配置的默认火山音色；也可直接传火山 speaker ID |
 | `response_format` | string | 否 | `mp3`、`opus` 或 `pcm`，默认 `mp3` |
 | `speed` | number | 否 | 语速范围 `0.5`–`2.0`，默认使用火山服务端语速 |
+| `instructions` | string | 否 | 语音指令，例如“请用平静、自然的语气说话” |
+| `speech_options` | object | 否 | 厂商中立语音扩展；当前 TTS 支持 `sample_rate` 和 `context.texts` |
 | `stream_format` | string | 否 | `audio` 或 `sse`；默认 `audio`，请求字幕时必须为 `sse` |
 | `timestamp_granularities` | string[] | 否 | `segment`、`word`；指定后默认返回 JSON 时间轴 |
 | `subtitle_formats` | string[] | 否 | `json`、`srt`、`vtt`；指定后默认启用 segment 和 word 时间轴 |
@@ -128,11 +130,35 @@ shimmer
 }
 ```
 
+语音指令、引用上文和采样率示例：
+
+```json
+{
+  "model": "sxh-tts",
+  "input": "你头发长了，十年了，你还好吗？",
+  "voice": "alloy",
+  "response_format": "mp3",
+  "instructions": "请用重逢时激动、克制的语气说话",
+  "speech_options": {
+    "sample_rate": 16000,
+    "context": {
+      "texts": [
+        "是你吗？怎么看着好像没怎么变啊？",
+        "挺好的，去年整理旧书时还翻到你写的毕业留言。"
+      ]
+    }
+  }
+}
+```
+
+`context.texts` 按数组顺序处理，最多 20 条；`instructions` 始终作为最后一条控制信息。火山当前只使用 `context_texts` 列表的第一项，因此网关会把上文和指令按顺序合并为一个有效上下文。未传 `sample_rate` 时保持 24k，当前可选 8k、16k、24k。
+
 当前不支持：
 
 - `wav`、`aac`、`flac`
 - 双向流式输入
 - 声音复刻
+- 图片上下文、参考音频、音调和 Markdown/SSML 控制
 - 通过 `metadata` 覆盖火山协议、资源 ID 或鉴权信息
 
 请求字幕或时间轴时必须同时传入 `"stream_format":"sse"`。普通裸音频请求的响应协议保持不变；在裸音频模式中传入字幕参数会返回 `400`，不会静默忽略。
@@ -363,6 +389,13 @@ const response = await client.audio.speech.create({
   voice: 'alloy',
   response_format: 'mp3',
   speed: 1.0,
+  instructions: '请用平静、自然的语气说话',
+  extra_body: {
+    speech_options: {
+      sample_rate: 16000,
+      context: { texts: ['上一轮正在讨论发布计划。'] },
+    },
+  },
 })
 
 const audio = Buffer.from(await response.arrayBuffer())
@@ -391,6 +424,13 @@ with client.audio.speech.with_streaming_response.create(
     voice="alloy",
     response_format="mp3",
     speed=1.0,
+    instructions="请用平静、自然的语气说话",
+    extra_body={
+        "speech_options": {
+            "sample_rate": 16000,
+            "context": {"texts": ["上一轮正在讨论发布计划。"]},
+        }
+    },
 ) as response:
     response.stream_to_file(output)
 ```
@@ -431,6 +471,25 @@ Authorization: Bearer <NEW_API_TOKEN>
 | `file` | file | 是 | 要识别的音频文件 |
 | `response_format` | string | 否 | `json`、`text`、`verbose_json`、`srt` 或 `vtt`，默认 `json` |
 | `timestamp_granularities[]` | string | 否 | `verbose_json` 专用，可重复传 `segment`、`word` |
+| `speech_options` | string | 否 | JSON 字符串形式的厂商中立 ASR 选项，必须只出现一次 |
+
+`speech_options` 当前支持：
+
+| 字段 | 类型 | 默认/范围 | 说明 |
+| --- | --- | --- | --- |
+| `text_normalization` | boolean | 默认 `true` | 数字规整 ITN；显式 `false` 会发送给上游 |
+| `punctuation` | boolean | 默认 `true` | 标点预测 |
+| `semantic_smoothing` | boolean | 默认 `true` | 语义顺滑 DDC |
+| `sensitive_word_filter` | boolean | 未传不启用 | 使用火山系统敏感词过滤；不允许客户端上传自定义词 |
+| `vad_segmentation` | boolean | 仅支持 `true` | 当前资源没有可验证的关闭参数，传 `false` 返回 `400` |
+| `speaker_diarization` | boolean | 未传不启用 | 自动说话人分离 |
+| `channel_mode` | string | `mixed` / `separate` | `separate` 用于双声道独立识别 |
+| `force_segment_after_ms` | integer | 200–60000 | 强制判停/分段阈值，单位毫秒 |
+| `hotwords` | string[] | 最多 5000 项 | 请求级热词 |
+| `replacements` | object | 最多 5000 项 | 键为原词、值为替换词 |
+| `context.texts` | string[] | 最多 20 条 | 文本上下文 |
+
+平台级热词表由服务端渠道配置，客户端不能传热词表 ID。未知字段、图片上下文和 `detect` 都返回 `400`，不会静默忽略。
 
 音频限制：
 
@@ -446,7 +505,7 @@ Authorization: Bearer <NEW_API_TOKEN>
 - 异步长文件识别
 - 客户端自定义火山资源 ID、鉴权或协议
 
-当前服务端固定启用数字规整、标点、语义顺滑和分段信息。客户端传入 `language`、`prompt` 或 `temperature` 不会改变火山请求，不应依赖这些参数。
+未传 `speech_options` 时，服务端继续启用数字规整、标点、语义顺滑和分段信息，保持旧客户端行为。客户端传入 `language`、`prompt` 或 `temperature` 不会改变火山请求，不应依赖这些参数。
 
 时间戳参数只允许与 `response_format=verbose_json` 组合。未传 `timestamp_granularities` 时默认只返回句段级 `segments`，保持旧客户端兼容。字段名也兼容不带 `[]` 的重复表单字段：
 
@@ -506,6 +565,19 @@ curl https://aiapi.shenxiaokeji.com/v1/audio/transcriptions \
   -F "file=@./meeting.mp3"
 ```
 
+启用说话人、双声道、热词、替换词和上下文：
+
+```bash
+curl https://aiapi.shenxiaokeji.com/v1/audio/transcriptions \
+  -H "Authorization: Bearer ${NEW_API_TOKEN}" \
+  -F "model=sxh-asr" \
+  -F "response_format=verbose_json" \
+  -F "timestamp_granularities[]=segment" \
+  -F "timestamp_granularities[]=word" \
+  -F 'speech_options={"speaker_diarization":true,"channel_mode":"separate","hotwords":["深效科技"],"replacements":{"深校科技":"深效科技"},"context":{"texts":["这是一场产品会议。"]}}' \
+  -F "file=@./stereo-meeting.mp3"
+```
+
 直接生成 SRT：
 
 ```bash
@@ -537,6 +609,13 @@ const result = await client.audio.transcriptions.create({
   file: fs.createReadStream('./meeting.mp3'),
   response_format: 'verbose_json',
   timestamp_granularities: ['segment', 'word'],
+  extra_body: {
+    speech_options: JSON.stringify({
+      speaker_diarization: true,
+      hotwords: ['深效科技'],
+      context: { texts: ['这是一场产品会议。'] },
+    }),
+  },
 })
 
 console.log(result.text)
@@ -550,6 +629,7 @@ console.log(result.words)
 使用官方 OpenAI Python SDK：
 
 ```python
+import json
 import os
 
 from openai import OpenAI
@@ -565,6 +645,16 @@ with open("meeting.mp3", "rb") as audio:
         file=audio,
         response_format="verbose_json",
         timestamp_granularities=["segment", "word"],
+        extra_body={
+            "speech_options": json.dumps(
+                {
+                    "speaker_diarization": True,
+                    "hotwords": ["深效科技"],
+                    "context": {"texts": ["这是一场产品会议。"]},
+                },
+                ensure_ascii=False,
+            )
+        },
     )
 
 print(result.text)
@@ -603,6 +693,8 @@ print(result.words)
       "start": 0.2,
       "end": 3.0,
       "text": "你好，这是一段录音转写结果。",
+      "speaker": "1",
+      "channel": 1,
       "tokens": null,
       "temperature": 0,
       "avg_logprob": 0,
@@ -615,19 +707,23 @@ print(result.words)
       "word": "你好",
       "start": 0.2,
       "end": 0.74,
-      "confidence": 0.98
+      "confidence": 0.98,
+      "speaker": "1",
+      "channel": 1
     },
     {
       "word": "2026年",
       "start": 0.74,
       "end": 1.52,
-      "confidence": 0.96
+      "confidence": 0.96,
+      "speaker": "1",
+      "channel": 1
     }
   ]
 }
 ```
 
-`segments` 和顶层 `words` 的时间单位都是秒。`confidence` 只在火山返回该字段时出现。字词内容、顺序、标点、数字组合和时间区间保持火山原样，不保证每个 Unicode 字符独立成词；火山未返回 words 时，响应中也不会伪造或均分时间轴。
+`segments` 和顶层 `words` 的时间单位都是秒。`speaker` 和 `channel` 只在对应能力启用且火山返回时出现；word 继承所属 segment 的标识。`confidence` 只在火山返回该字段时出现。字词内容、顺序、标点、数字组合和时间区间保持火山原样，不保证每个 Unicode 字符独立成词；火山未返回 words 时，响应中也不会伪造或均分时间轴。
 
 SRT 示例：
 
@@ -708,12 +804,14 @@ X-Volc-Logid: <火山请求日志 ID>
 | TTS 模型 | 客户端使用 `sxh-tts`，服务端映射到底层火山模型 |
 | TTS 音色 | OpenAI 六个标准名称映射到渠道默认音色，或直传火山 speaker ID |
 | TTS 格式 | MP3、Opus、PCM |
+| TTS 扩展 | 8k/16k/24k、语音指令、文本引用上文 |
 | TTS SSE | 支持 `speech.audio.delta`、`speech.audio.done` 和 `sxh.speech.subtitle.*` 扩展事件 |
 | TTS 字幕 | 句级、字词级 JSON 时间轴，以及 SRT、VTT |
 | ASR 模型 | 客户端使用 `sxh-asr`，服务端映射到底层火山模型 |
 | ASR 输入 | WAV、MP3、OGG、Opus，最大 100MB、最长 2 小时 |
 | ASR 输出 | JSON、纯文本、Verbose JSON、SRT、VTT |
 | ASR 时间戳 | 句级和火山原始字词单元，统一为秒 |
+| ASR 扩展 | ITN、标点、DDC、敏感词、VAD、强制分段、说话人、双声道、热词、替换词、文本上下文 |
 | ASR 实时流 | 不支持 |
 
 OpenAI SDK 只负责构造兼容请求，实际请求会发送到深效科技服务，不会发送到 OpenAI。客户端必须显式配置本文给出的 Base URL 和模型名称。
@@ -721,5 +819,6 @@ OpenAI SDK 只负责构造兼容请求，实际请求会发送到深效科技服
 ## 7. 参考资料
 
 - [OpenAI Audio API 参考](https://platform.openai.com/docs/api-reference/audio)
-- [火山 Seed-TTS 2.0 V3 HTTP Chunked 接口](https://www.volcengine.com/docs/6561/2228192?lang=zh)
+- [火山 Seed-TTS 2.0 V3 HTTP Chunked 接口](https://www.volcengine.com/docs/6561/1598757?lang=zh)
 - [火山大模型录音文件极速版 ASR 接口](https://www.volcengine.com/docs/6561/1631584?lang=zh)
+- [SXH 当前资源能力矩阵](./volc-speech-capability-matrix.md)

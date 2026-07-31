@@ -1656,6 +1656,11 @@
                       "segment",
                       "word"
                     ]
+                  },
+                  "speech_options": {
+                    "type": "string",
+                    "description": "厂商中立语音选项 JSON 字符串。火山极速 ASR 支持 text_normalization、punctuation、semantic_smoothing、sensitive_word_filter、vad_segmentation=true、speaker_diarization、channel_mode、force_segment_after_ms、hotwords、replacements 和 context.texts；未知或未验证字段返回 400。",
+                    "example": "{\"text_normalization\":true,\"punctuation\":true,\"speaker_diarization\":true,\"channel_mode\":\"separate\",\"hotwords\":[\"专有名词\"]}"
                   }
                 },
                 "required": [
@@ -3834,6 +3839,10 @@
               ]
             },
             "description": "时间戳粒度；火山极速 ASR 仅支持与 verbose_json 组合"
+          },
+          "speech_options": {
+            "type": "string",
+            "description": "multipart JSON 字符串形式的厂商中立语音选项"
           }
         }
       },
@@ -3871,7 +3880,29 @@
           "segments": {
             "type": "array",
             "items": {
-              "type": "object"
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "integer"
+                },
+                "start": {
+                  "type": "number"
+                },
+                "end": {
+                  "type": "number"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "speaker": {
+                  "type": "string",
+                  "description": "说话人标识，仅在上游返回时出现"
+                },
+                "channel": {
+                  "type": "integer",
+                  "description": "声道编号，仅在 channel_mode=separate 且上游返回时出现"
+                }
+              }
             }
           },
           "words": {
@@ -3892,7 +3923,150 @@
                 },
                 "confidence": {
                   "type": "number"
+                },
+                "speaker": {
+                  "type": "string",
+                  "description": "继承所属分句的说话人标识"
+                },
+                "channel": {
+                  "type": "integer",
+                  "description": "继承所属分句的声道编号"
                 }
+              }
+            }
+          },
+          "annotations": {
+            "type": "array",
+            "description": "厂商中立结构化语音标注。当前 volc.bigasr.auc_turbo 未验证到音乐或 POI 结构化结果，因此不会返回此字段。",
+            "items": {
+              "$ref": "#/components/schemas/SpeechAnnotation"
+            }
+          }
+        }
+      },
+      "SpeechAnnotation": {
+        "type": "object",
+        "required": [
+          "type",
+          "start",
+          "end",
+          "label",
+          "confidence"
+        ],
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "start": {
+            "type": "number",
+            "description": "开始时间，单位秒"
+          },
+          "end": {
+            "type": "number",
+            "description": "结束时间，单位秒"
+          },
+          "label": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": "number",
+            "nullable": true
+          }
+        }
+      },
+      "SpeechOptions": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "sample_rate": {
+            "type": "integer",
+            "enum": [
+              8000,
+              16000,
+              24000
+            ]
+          },
+          "text_normalization": {
+            "type": "boolean"
+          },
+          "punctuation": {
+            "type": "boolean"
+          },
+          "semantic_smoothing": {
+            "type": "boolean"
+          },
+          "sensitive_word_filter": {
+            "type": "boolean"
+          },
+          "vad_segmentation": {
+            "type": "boolean",
+            "description": "当前极速 ASR 仅支持 true；显式 false 返回 400"
+          },
+          "speaker_diarization": {
+            "type": "boolean"
+          },
+          "channel_mode": {
+            "type": "string",
+            "enum": [
+              "mixed",
+              "separate"
+            ]
+          },
+          "force_segment_after_ms": {
+            "type": "integer",
+            "minimum": 200,
+            "maximum": 60000
+          },
+          "hotwords": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "replacements": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "detect": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "music",
+                "poi"
+              ]
+            },
+            "description": "保留字段；当前极速资源未返回结构化标注，传入会返回 400"
+          },
+          "context": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "texts": {
+                "type": "array",
+                "maxItems": 20,
+                "items": {
+                  "type": "string"
+                }
+              },
+              "images": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "image_url"
+                  ],
+                  "properties": {
+                    "image_url": {
+                      "type": "string",
+                      "format": "uri"
+                    }
+                  }
+                },
+                "description": "保留字段；当前两个资源均未验证，传入会返回 400"
               }
             }
           }
@@ -3915,16 +4089,13 @@
             "description": "要转换的文本",
             "maxLength": 4096
           },
-          "voice": {
+      "voice": {
+        "type": "string",
+        "description": "音色。火山 Seed-TTS 2.0 接受 OpenAI 标准音色（映射到渠道默认音色）或火山 speaker ID。"
+      },
+          "instructions": {
             "type": "string",
-            "enum": [
-              "alloy",
-              "echo",
-              "fable",
-              "onyx",
-              "nova",
-              "shimmer"
-            ]
+            "description": "语音指令；在引用上文之后作为最后一条控制信息发送"
           },
           "response_format": {
             "type": "string",
@@ -3974,6 +4145,10 @@
               ]
             },
             "description": "火山 Seed-TTS 字幕格式；必须使用 stream_format=sse"
+          },
+          "speech_options": {
+            "$ref": "#/components/schemas/SpeechOptions",
+            "description": "厂商中立语音扩展。当前 Seed-TTS 2.0 仅开放 sample_rate 和 context.texts。"
           }
         }
       },
