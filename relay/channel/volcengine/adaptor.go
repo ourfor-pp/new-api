@@ -59,8 +59,10 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 		}
 		c.Set(contextKeyResponseFormat, encoding)
 		info.VolcSpeechAudit = &relaycommon.VolcSpeechAuditInfo{
-			ResourceID: volcTTSResourceID,
-			Protocol:   volcTTSProtocol,
+			ResourceID:             volcTTSResourceID,
+			Protocol:               volcTTSProtocol,
+			TimestampGranularities: append([]string(nil), request.TimestampGranularities...),
+			SubtitleFormats:        append([]string(nil), request.SubtitleFormats...),
 		}
 		setVolcSpeechAuditContext(c, info.VolcSpeechAudit)
 		jsonData, err := common.Marshal(volcRequest)
@@ -83,8 +85,13 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 		}
 		c.Set(contextKeyResponseFormat, request.ResponseFormat)
 		info.VolcSpeechAudit = &relaycommon.VolcSpeechAuditInfo{
-			ResourceID: volcASRFlashResourceID,
-			Protocol:   volcASRFlashProtocol,
+			ResourceID:             volcASRFlashResourceID,
+			Protocol:               volcASRFlashProtocol,
+			TimestampGranularities: append([]string(nil), request.TimestampGranularities...),
+		}
+		switch strings.ToLower(request.ResponseFormat) {
+		case "srt", "vtt":
+			info.VolcSpeechAudit.SubtitleFormats = []string{strings.ToLower(request.ResponseFormat)}
 		}
 		setVolcSpeechAuditContext(c, info.VolcSpeechAudit)
 		return requestBody, nil

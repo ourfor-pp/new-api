@@ -10,14 +10,16 @@ import (
 )
 
 type AudioRequest struct {
-	Model          string          `json:"model"`
-	Input          string          `json:"input"`
-	Voice          string          `json:"voice"`
-	Instructions   string          `json:"instructions,omitempty"`
-	ResponseFormat string          `json:"response_format,omitempty"`
-	Speed          *float64        `json:"speed,omitempty"`
-	StreamFormat   string          `json:"stream_format,omitempty"`
-	Metadata       json.RawMessage `json:"metadata,omitempty"`
+	Model                  string          `json:"model"`
+	Input                  string          `json:"input"`
+	Voice                  string          `json:"voice"`
+	Instructions           string          `json:"instructions,omitempty"`
+	ResponseFormat         string          `json:"response_format,omitempty"`
+	Speed                  *float64        `json:"speed,omitempty"`
+	StreamFormat           string          `json:"stream_format,omitempty"`
+	TimestampGranularities []string        `json:"timestamp_granularities,omitempty"`
+	SubtitleFormats        []string        `json:"subtitle_formats,omitempty"`
+	Metadata               json.RawMessage `json:"metadata,omitempty"`
 	// vllm-omini
 	TaskType                json.RawMessage `json:"task_type,omitempty"`
 	Language                json.RawMessage `json:"language,omitempty"`
@@ -60,11 +62,19 @@ type AudioResponse struct {
 }
 
 type WhisperVerboseJSONResponse struct {
-	Task     string    `json:"task,omitempty"`
-	Language string    `json:"language,omitempty"`
-	Duration float64   `json:"duration,omitempty"`
-	Text     string    `json:"text,omitempty"`
-	Segments []Segment `json:"segments,omitempty"`
+	Task     string      `json:"task,omitempty"`
+	Language string      `json:"language,omitempty"`
+	Duration float64     `json:"duration,omitempty"`
+	Text     string      `json:"text,omitempty"`
+	Segments []Segment   `json:"segments,omitempty"`
+	Words    []AudioWord `json:"words,omitempty"`
+}
+
+type AudioWord struct {
+	Word       string   `json:"word"`
+	Start      float64  `json:"start"`
+	End        float64  `json:"end"`
+	Confidence *float64 `json:"confidence,omitempty"`
 }
 
 type Segment struct {

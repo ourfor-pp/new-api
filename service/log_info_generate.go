@@ -132,6 +132,17 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 		if audit.PartialFailure {
 			volcSpeech["partial_failure"] = true
 		}
+		if len(audit.TimestampGranularities) > 0 {
+			volcSpeech["timestamp_granularities"] = audit.TimestampGranularities
+		}
+		if len(audit.SubtitleFormats) > 0 {
+			volcSpeech["subtitle_formats"] = audit.SubtitleFormats
+		}
+		volcSpeech["subtitle_sentence_count"] = audit.SubtitleSentenceCount
+		volcSpeech["subtitle_word_count"] = audit.SubtitleWordCount
+		if audit.UsageSource != "" {
+			volcSpeech["usage_source"] = audit.UsageSource
+		}
 		other["volc_speech"] = volcSpeech
 	}
 	return other

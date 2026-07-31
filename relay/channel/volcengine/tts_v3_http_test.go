@@ -27,6 +27,23 @@ func buildVolcTTSJSONLine(t *testing.T, result volcTTSV3Result) []byte {
 	return append(payload, '\n')
 }
 
+func parseVolcTTSSSEEvents(t *testing.T, body string) []map[string]interface{} {
+	t.Helper()
+	parts := strings.Split(body, "\n\n")
+	events := make([]map[string]interface{}, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		require.True(t, strings.HasPrefix(part, "data: "))
+		var event map[string]interface{}
+		require.NoError(t, common.Unmarshal([]byte(strings.TrimPrefix(part, "data: ")), &event))
+		events = append(events, event)
+	}
+	return events
+}
+
 func newVolcSpeechTestContext() (*gin.Context, *httptest.ResponseRecorder) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
@@ -62,6 +79,7 @@ func TestBuildVolcTTSV3RequestMapsOnlyStandardVoices(t *testing.T) {
 	assert.Equal(t, "ogg_opus", encoding)
 	require.NotNil(t, request.ReqParams.AudioParams.SpeechRate)
 	assert.Equal(t, 25, *request.ReqParams.AudioParams.SpeechRate)
+	assert.Nil(t, request.ReqParams.AudioParams.EnableSubtitle)
 
 	direct, _, err := buildVolcTTSV3Request(dto.AudioRequest{
 		Input:          "测试文本",
@@ -78,6 +96,20 @@ func TestBuildVolcTTSV3RequestMapsOnlyStandardVoices(t *testing.T) {
 	require.ErrorContains(t, err, "default_tts_speaker")
 	channelConfigErr := types.NewError(err, types.ErrorCodeConvertRequestFailed)
 	assert.True(t, types.IsChannelError(channelConfigErr))
+}
+
+func TestBuildVolcTTSV3RequestEnablesSubtitleOnlyWhenRequested(t *testing.T) {
+	request, _, err := buildVolcTTSV3Request(dto.AudioRequest{
+		Input:                  "测试文本",
+		Voice:                  "speaker",
+		ResponseFormat:         "mp3",
+		StreamFormat:           "sse",
+		TimestampGranularities: []string{"segment", "word"},
+		SubtitleFormats:        []string{"json", "srt"},
+	}, nil)
+	require.NoError(t, err)
+	require.NotNil(t, request.ReqParams.AudioParams.EnableSubtitle)
+	assert.True(t, *request.ReqParams.AudioParams.EnableSubtitle)
 }
 
 func TestVolcTTSV3ValidationRejectsUnsupportedFormatAndSpeed(t *testing.T) {
@@ -152,6 +184,173 @@ func TestVolcTTSV3SuccessfulFinishWithoutUsageFallsBackToUnicodeCharacters(t *te
 	usageValue, apiErr := handleVolcTTSV3Response(context, response, info, "mp3")
 	require.Nil(t, apiErr)
 	assert.Equal(t, 3, usageValue.(*dto.Usage).PromptTokens)
+	assert.Equal(t, "fallback_unicode", info.VolcSpeechAudit.UsageSource)
+}
+
+func TestVolcTTSV3SSEStreamsAudioAndFinalSubtitleEvents(t *testing.T) {
+	confidenceOne := 0.92
+	confidenceTwo := 0.95
+	audio := []byte("audio-one")
+	stream := bytes.Join([][]byte{
+		buildVolcTTSJSONLine(t, volcTTSV3Result{Code: 0, Data: base64.StdEncoding.EncodeToString(audio)}),
+		buildVolcTTSJSONLine(t, volcTTSV3Result{
+			Code:     0,
+			Sentence: &volcTTSV3Sentence{Text: "第一句。"},
+		}),
+		buildVolcTTSJSONLine(t, volcTTSV3Result{
+			Code: 0,
+			Sentence: &volcTTSV3Sentence{
+				Text: "第一句。",
+				Words: []volcTTSV3Word{
+					{Word: "第", StartTime: 0.235, EndTime: 0.415, Confidence: &confidenceOne},
+					{Word: "一句。", StartTime: 0.415, EndTime: 0.915, Confidence: &confidenceTwo},
+				},
+			},
+		}),
+		buildVolcTTSJSONLine(t, volcTTSV3Result{
+			Code: 0,
+			Sentence: &volcTTSV3Sentence{
+				Text: "第二句。",
+				Words: []volcTTSV3Word{
+					{Word: "第二句。", StartTime: 1.2, EndTime: 2.0},
+				},
+			},
+		}),
+		buildVolcTTSJSONLine(t, volcTTSV3Result{Code: 20000000}),
+	}, nil)
+	context, recorder := newVolcSpeechTestContext()
+	info := &relaycommon.RelayInfo{
+		Request: &dto.AudioRequest{
+			Input:                  "第一句。第二句。",
+			StreamFormat:           "sse",
+			TimestampGranularities: []string{"segment", "word"},
+			SubtitleFormats:        []string{"json", "srt", "vtt"},
+		},
+		OriginModelName: channelconstant.ModelDoubaoSeedTTS20,
+		VolcSpeechAudit: &relaycommon.VolcSpeechAuditInfo{
+			ResourceID:             volcTTSResourceID,
+			Protocol:               volcTTSProtocol,
+			TimestampGranularities: []string{"segment", "word"},
+			SubtitleFormats:        []string{"json", "srt", "vtt"},
+		},
+	}
+	response := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader(stream))}
+
+	usageValue, apiErr := handleVolcTTSV3Response(context, response, info, "mp3")
+	require.Nil(t, apiErr)
+	assert.Equal(t, 8, usageValue.(*dto.Usage).PromptTokens)
+	assert.Equal(t, "text/event-stream", recorder.Header().Get("Content-Type"))
+	assert.Equal(t, 2, info.VolcSpeechAudit.SubtitleSentenceCount)
+	assert.Equal(t, 3, info.VolcSpeechAudit.SubtitleWordCount)
+	assert.Equal(t, "fallback_unicode", info.VolcSpeechAudit.UsageSource)
+
+	events := parseVolcTTSSSEEvents(t, recorder.Body.String())
+	require.Len(t, events, 5)
+	assert.Equal(t, "speech.audio.delta", events[0]["type"])
+	assert.Equal(t, base64.StdEncoding.EncodeToString(audio), events[0]["audio"])
+	assert.Equal(t, "sxh.speech.subtitle.delta", events[1]["type"])
+	assert.Equal(t, "第一句。", events[1]["text"])
+	assert.InDelta(t, 0.235, events[1]["startTime"], 0.0001)
+	assert.InDelta(t, 0.915, events[1]["endTime"], 0.0001)
+	words, ok := events[1]["words"].([]interface{})
+	require.True(t, ok)
+	require.Len(t, words, 2)
+	assert.Equal(t, "sxh.speech.subtitle.delta", events[2]["type"])
+	assert.Equal(t, "第二句。", events[2]["text"])
+	assert.Equal(t, "sxh.speech.subtitle.done", events[3]["type"])
+	assert.Equal(t, true, events[3]["available"])
+	formats, ok := events[3]["formats"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "1\n00:00:00,235 --> 00:00:00,915\n第一句。\n\n2\n00:00:01,200 --> 00:00:02,000\n第二句。\n\n", formats["srt"])
+	assert.Equal(t, "WEBVTT\n\n00:00:00.235 --> 00:00:00.915\n第一句。\n\n00:00:01.200 --> 00:00:02.000\n第二句。\n\n", formats["vtt"])
+	assert.Equal(t, "speech.audio.done", events[4]["type"])
+}
+
+func TestVolcTTSV3SSEWithoutSubtitleKeepsStandardAudioEvents(t *testing.T) {
+	audioOne := []byte("audio-one")
+	audioTwo := []byte("audio-two")
+	stream := bytes.Join([][]byte{
+		buildVolcTTSJSONLine(t, volcTTSV3Result{Code: 0, Data: base64.StdEncoding.EncodeToString(audioOne)}),
+		buildVolcTTSJSONLine(t, volcTTSV3Result{Code: 0, Data: base64.StdEncoding.EncodeToString(audioTwo)}),
+		buildVolcTTSJSONLine(t, volcTTSV3Result{Code: 20000000, Usage: &volcTTSV3Usage{TextWords: 2}}),
+	}, nil)
+	context, recorder := newVolcSpeechTestContext()
+	info := &relaycommon.RelayInfo{
+		Request:         &dto.AudioRequest{Input: "测试", StreamFormat: "sse"},
+		VolcSpeechAudit: &relaycommon.VolcSpeechAuditInfo{},
+	}
+	response := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader(stream))}
+
+	usageValue, apiErr := handleVolcTTSV3Response(context, response, info, "mp3")
+	require.Nil(t, apiErr)
+	assert.Equal(t, 2, usageValue.(*dto.Usage).PromptTokens)
+	events := parseVolcTTSSSEEvents(t, recorder.Body.String())
+	require.Len(t, events, 3)
+	assert.Equal(t, "speech.audio.delta", events[0]["type"])
+	assert.Equal(t, "speech.audio.delta", events[1]["type"])
+	assert.Equal(t, "speech.audio.done", events[2]["type"])
+	var restoredAudio []byte
+	for _, event := range events[:2] {
+		chunk, decodeErr := base64.StdEncoding.DecodeString(event["audio"].(string))
+		require.NoError(t, decodeErr)
+		restoredAudio = append(restoredAudio, chunk...)
+	}
+	assert.Equal(t, append(audioOne, audioTwo...), restoredAudio)
+}
+
+func TestVolcTTSV3SSECompletesWhenSubtitleIsUnavailable(t *testing.T) {
+	stream := bytes.Join([][]byte{
+		buildVolcTTSJSONLine(t, volcTTSV3Result{Code: 0, Data: base64.StdEncoding.EncodeToString([]byte("audio"))}),
+		buildVolcTTSJSONLine(t, volcTTSV3Result{
+			Code:     0,
+			Sentence: &volcTTSV3Sentence{Text: "测试", Words: nil},
+		}),
+		buildVolcTTSJSONLine(t, volcTTSV3Result{Code: 20000000}),
+	}, nil)
+	context, recorder := newVolcSpeechTestContext()
+	info := &relaycommon.RelayInfo{
+		Request: &dto.AudioRequest{
+			Input:                  "测试",
+			StreamFormat:           "sse",
+			TimestampGranularities: []string{"word"},
+			SubtitleFormats:        []string{"json", "srt"},
+		},
+		VolcSpeechAudit: &relaycommon.VolcSpeechAuditInfo{},
+	}
+	response := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader(stream))}
+
+	usageValue, apiErr := handleVolcTTSV3Response(context, response, info, "mp3")
+	require.Nil(t, apiErr)
+	assert.Equal(t, 2, usageValue.(*dto.Usage).PromptTokens)
+	events := parseVolcTTSSSEEvents(t, recorder.Body.String())
+	require.Len(t, events, 3)
+	assert.Equal(t, "speech.audio.delta", events[0]["type"])
+	assert.Equal(t, "sxh.speech.subtitle.done", events[1]["type"])
+	assert.Equal(t, false, events[1]["available"])
+	assert.Equal(t, "speech.audio.done", events[2]["type"])
+}
+
+func TestVolcTTSV3SSEInterruptedAfterAudioEmitsErrorAndIsNotRetryable(t *testing.T) {
+	stream := buildVolcTTSJSONLine(t, volcTTSV3Result{
+		Code: 0,
+		Data: base64.StdEncoding.EncodeToString([]byte("partial-audio")),
+	})
+	context, recorder := newVolcSpeechTestContext()
+	info := &relaycommon.RelayInfo{
+		Request:         &dto.AudioRequest{Input: "测试", StreamFormat: "sse"},
+		VolcSpeechAudit: &relaycommon.VolcSpeechAuditInfo{},
+	}
+	response := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader(stream))}
+
+	usage, apiErr := handleVolcTTSV3Response(context, response, info, "mp3")
+	assert.Nil(t, usage)
+	require.NotNil(t, apiErr)
+	assert.True(t, types.IsSkipRetryError(apiErr))
+	assert.True(t, info.VolcSpeechAudit.PartialFailure)
+	events := parseVolcTTSSSEEvents(t, recorder.Body.String())
+	require.Len(t, events, 2)
+	assert.Equal(t, "speech.audio.delta", events[0]["type"])
+	assert.Equal(t, "error", events[1]["type"])
 }
 
 func TestVolcTTSV3InterruptedAfterAudioIsPartialAndNotRetryable(t *testing.T) {

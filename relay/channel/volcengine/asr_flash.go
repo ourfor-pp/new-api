@@ -56,9 +56,17 @@ type volcASRResult struct {
 }
 
 type volcASRUtterance struct {
-	StartTime int64  `json:"start_time"`
-	EndTime   int64  `json:"end_time"`
-	Text      string `json:"text"`
+	StartTime int64         `json:"start_time"`
+	EndTime   int64         `json:"end_time"`
+	Text      string        `json:"text"`
+	Words     []volcASRWord `json:"words,omitempty"`
+}
+
+type volcASRWord struct {
+	StartTime  int64    `json:"start_time"`
+	EndTime    int64    `json:"end_time"`
+	Text       string   `json:"text"`
+	Confidence *float64 `json:"confidence,omitempty"`
 }
 
 const volcASRAudioDataPlaceholder = "__NEW_API_VOLC_ASR_AUDIO_DATA__"
@@ -243,14 +251,39 @@ func handleVolcASRFlashResponse(c *gin.Context, resp *http.Response, info *relay
 			Duration: float64(durationMS) / 1000,
 			Text:     transcript,
 		}
+		wantSegments := true
+		wantWords := false
+		if request, ok := info.Request.(*dto.AudioRequest); ok && len(request.TimestampGranularities) > 0 {
+			wantSegments = false
+			for _, granularity := range request.TimestampGranularities {
+				if granularity == "segment" {
+					wantSegments = true
+				}
+				if granularity == "word" {
+					wantWords = true
+				}
+			}
+		}
 		if result.Result != nil {
 			for index, utterance := range result.Result.Utterances {
-				verbose.Segments = append(verbose.Segments, dto.Segment{
-					Id:    index,
-					Start: float64(utterance.StartTime) / 1000,
-					End:   float64(utterance.EndTime) / 1000,
-					Text:  utterance.Text,
-				})
+				if wantSegments {
+					verbose.Segments = append(verbose.Segments, dto.Segment{
+						Id:    index,
+						Start: float64(utterance.StartTime) / 1000,
+						End:   float64(utterance.EndTime) / 1000,
+						Text:  utterance.Text,
+					})
+				}
+				if wantWords {
+					for _, word := range utterance.Words {
+						verbose.Words = append(verbose.Words, dto.AudioWord{
+							Word:       word.Text,
+							Start:      float64(word.StartTime) / 1000,
+							End:        float64(word.EndTime) / 1000,
+							Confidence: word.Confidence,
+						})
+					}
+				}
 			}
 		}
 		payload, marshalErr := common.Marshal(verbose)
@@ -258,6 +291,23 @@ func handleVolcASRFlashResponse(c *gin.Context, resp *http.Response, info *relay
 			return nil, types.NewErrorWithStatusCode(marshalErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 		}
 		c.Data(http.StatusOK, gin.MIMEJSON, payload)
+	case "srt", "vtt":
+		cues := make([]volcSubtitleCue, 0)
+		if result.Result != nil {
+			cues = make([]volcSubtitleCue, 0, len(result.Result.Utterances))
+			for _, utterance := range result.Result.Utterances {
+				cues = append(cues, volcSubtitleCue{
+					StartMS: utterance.StartTime,
+					EndMS:   utterance.EndTime,
+					Text:    utterance.Text,
+				})
+			}
+		}
+		if strings.EqualFold(responseFormat, "srt") {
+			c.Data(http.StatusOK, "application/x-subrip; charset=utf-8", []byte(formatVolcSRT(cues)))
+		} else {
+			c.Data(http.StatusOK, "text/vtt; charset=utf-8", []byte(formatVolcVTT(cues)))
+		}
 	default:
 		return nil, types.NewErrorWithStatusCode(
 			fmt.Errorf("unsupported response_format for doubao-seed-asr-flash: %s", responseFormat),
@@ -269,10 +319,18 @@ func handleVolcASRFlashResponse(c *gin.Context, resp *http.Response, info *relay
 
 	info.VolcSpeechAudit.AudioDurationMS = durationMS
 	info.VolcSpeechAudit.BillingUnits = billingUnits
+	if result.Result != nil {
+		info.VolcSpeechAudit.SubtitleSentenceCount = len(result.Result.Utterances)
+		for _, utterance := range result.Result.Utterances {
+			info.VolcSpeechAudit.SubtitleWordCount += len(utterance.Words)
+		}
+	}
 	setVolcSpeechAuditContext(c, info.VolcSpeechAudit)
 	logger.LogInfo(c, fmt.Sprintf(
-		"火山语音请求完成: model=%s resource_id=%s protocol=%s log_id=%s audio_duration_ms=%d billing_units=%d",
+		"火山语音请求完成: model=%s resource_id=%s protocol=%s log_id=%s audio_duration_ms=%d billing_units=%d timestamp_granularities=%v subtitle_formats=%v subtitle_sentence_count=%d subtitle_word_count=%d",
 		info.OriginModelName, volcASRFlashResourceID, volcASRFlashProtocol, info.VolcSpeechAudit.LogID, durationMS, billingUnits,
+		info.VolcSpeechAudit.TimestampGranularities, info.VolcSpeechAudit.SubtitleFormats,
+		info.VolcSpeechAudit.SubtitleSentenceCount, info.VolcSpeechAudit.SubtitleWordCount,
 	))
 	return &dto.Usage{PromptTokens: billingUnits, TotalTokens: billingUnits}, nil
 }

@@ -67,6 +67,17 @@ func AudioHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 			if info.VolcSpeechAudit.LogID != "" {
 				volcSpeechAudit["log_id"] = info.VolcSpeechAudit.LogID
 			}
+			if len(info.VolcSpeechAudit.TimestampGranularities) > 0 {
+				volcSpeechAudit["timestamp_granularities"] = info.VolcSpeechAudit.TimestampGranularities
+			}
+			if len(info.VolcSpeechAudit.SubtitleFormats) > 0 {
+				volcSpeechAudit["subtitle_formats"] = info.VolcSpeechAudit.SubtitleFormats
+			}
+			volcSpeechAudit["subtitle_sentence_count"] = info.VolcSpeechAudit.SubtitleSentenceCount
+			volcSpeechAudit["subtitle_word_count"] = info.VolcSpeechAudit.SubtitleWordCount
+			if info.VolcSpeechAudit.UsageSource != "" {
+				volcSpeechAudit["usage_source"] = info.VolcSpeechAudit.UsageSource
+			}
 			c.Set("volc_speech_audit", volcSpeechAudit)
 		}
 		if httpResp.StatusCode != http.StatusOK {

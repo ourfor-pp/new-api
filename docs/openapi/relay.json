@@ -1651,7 +1651,11 @@
                         "segment"
                       ]
                     },
-                    "example": ""
+                    "description": "时间戳粒度；火山极速 ASR 仅支持与 verbose_json 组合",
+                    "example": [
+                      "segment",
+                      "word"
+                    ]
                   }
                 },
                 "required": [
@@ -1778,6 +1782,12 @@
                 "schema": {
                   "type": "string",
                   "format": "binary"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string",
+                  "description": "stream_format=sse 时返回音频 delta/done；火山语音字幕使用 sxh.speech.subtitle.* 扩展事件"
                 }
               }
             },
@@ -3804,7 +3814,8 @@
                 "word",
                 "segment"
               ]
-            }
+            },
+            "description": "时间戳粒度；火山极速 ASR 仅支持与 verbose_json 组合"
           }
         }
       },
@@ -3838,6 +3849,34 @@
         "properties": {
           "text": {
             "type": "string"
+          },
+          "segments": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "words": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "word": {
+                  "type": "string"
+                },
+                "start": {
+                  "type": "number",
+                  "description": "开始时间，单位秒"
+                },
+                "end": {
+                  "type": "number",
+                  "description": "结束时间，单位秒"
+                },
+                "confidence": {
+                  "type": "number"
+                }
+              }
+            }
           }
         }
       },
@@ -3886,6 +3925,37 @@
             "minimum": 0.25,
             "maximum": 4,
             "default": 1
+          },
+          "stream_format": {
+            "type": "string",
+            "enum": [
+              "audio",
+              "sse"
+            ],
+            "default": "audio"
+          },
+          "timestamp_granularities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "segment",
+                "word"
+              ]
+            },
+            "description": "火山 Seed-TTS 字幕时间轴粒度；必须使用 stream_format=sse"
+          },
+          "subtitle_formats": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "json",
+                "srt",
+                "vtt"
+              ]
+            },
+            "description": "火山 Seed-TTS 字幕格式；必须使用 stream_format=sse"
           }
         }
       },

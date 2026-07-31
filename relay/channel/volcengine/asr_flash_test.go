@@ -123,12 +123,20 @@ func TestVolcASRFlashStreamingBodyUsesExactContentLength(t *testing.T) {
 }
 
 func TestVolcASRFlashResponseUsesActualDurationAndVerboseSegments(t *testing.T) {
+	confidence := 0.93
 	body, err := common.Marshal(volcASRFlashResponse{
 		AudioInfo: &volcASRAudioInfo{Duration: 2499},
 		Result: &volcASRResult{
 			Text: "关闭透传。",
 			Utterances: []volcASRUtterance{
-				{StartTime: 450, EndTime: 1530, Text: "关闭透传。"},
+				{
+					StartTime: 450,
+					EndTime:   1530,
+					Text:      "关闭透传。",
+					Words: []volcASRWord{
+						{StartTime: 450, EndTime: 770, Text: "关", Confidence: &confidence},
+					},
+				},
 			},
 		},
 	})
@@ -162,6 +170,234 @@ func TestVolcASRFlashResponseUsesActualDurationAndVerboseSegments(t *testing.T) 
 	require.Len(t, verbose.Segments, 1)
 	assert.InDelta(t, 0.45, verbose.Segments[0].Start, 0.0001)
 	assert.InDelta(t, 1.53, verbose.Segments[0].End, 0.0001)
+	assert.Empty(t, verbose.Words)
+}
+
+func TestVolcASRFlashVerboseJSONReturnsRequestedWordAndSegmentTimestamps(t *testing.T) {
+	confidence := 0.91
+	body, err := common.Marshal(volcASRFlashResponse{
+		AudioInfo: &volcASRAudioInfo{Duration: 2499},
+		Result: &volcASRResult{
+			Text: "关闭透传。",
+			Utterances: []volcASRUtterance{
+				{
+					StartTime: 450,
+					EndTime:   1530,
+					Text:      "关闭透传。",
+					Words: []volcASRWord{
+						{StartTime: 450, EndTime: 770, Text: "关", Confidence: &confidence},
+						{StartTime: 770, EndTime: 970, Text: "闭"},
+					},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	context, recorder := newVolcSpeechTestContext()
+	info := &relaycommon.RelayInfo{
+		OriginModelName: channelconstant.ModelDoubaoSeedASRFlash,
+		Request: &dto.AudioRequest{
+			LocalAudioDurationMS: 60000,
+			TimestampGranularities: []string{
+				"segment",
+				"word",
+			},
+		},
+		VolcSpeechAudit: &relaycommon.VolcSpeechAuditInfo{
+			ResourceID:             volcASRFlashResourceID,
+			Protocol:               volcASRFlashProtocol,
+			TimestampGranularities: []string{"segment", "word"},
+		},
+	}
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"X-Api-Status-Code": []string{"20000000"}},
+		Body:       ioNopCloser(body),
+	}
+
+	usageValue, apiErr := handleVolcASRFlashResponse(context, response, info, "verbose_json")
+	require.Nil(t, apiErr)
+	assert.Equal(t, 42, usageValue.(*dto.Usage).PromptTokens)
+
+	var verbose dto.WhisperVerboseJSONResponse
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &verbose))
+	require.Len(t, verbose.Segments, 1)
+	require.Len(t, verbose.Words, 2)
+	assert.Equal(t, "关", verbose.Words[0].Word)
+	assert.InDelta(t, 0.45, verbose.Words[0].Start, 0.0001)
+	assert.InDelta(t, 0.77, verbose.Words[0].End, 0.0001)
+	require.NotNil(t, verbose.Words[0].Confidence)
+	assert.InDelta(t, confidence, *verbose.Words[0].Confidence, 0.0001)
+	assert.Nil(t, verbose.Words[1].Confidence)
+	assert.Equal(t, 1, info.VolcSpeechAudit.SubtitleSentenceCount)
+	assert.Equal(t, 2, info.VolcSpeechAudit.SubtitleWordCount)
+}
+
+func TestVolcASRFlashVerboseJSONCanReturnOnlyWords(t *testing.T) {
+	body, err := common.Marshal(volcASRFlashResponse{
+		AudioInfo: &volcASRAudioInfo{Duration: 1000},
+		Result: &volcASRResult{
+			Text: "测试",
+			Utterances: []volcASRUtterance{{
+				StartTime: 0,
+				EndTime:   1000,
+				Text:      "测试",
+				Words:     []volcASRWord{{StartTime: 0, EndTime: 500, Text: "测"}},
+			}},
+		},
+	})
+	require.NoError(t, err)
+	context, recorder := newVolcSpeechTestContext()
+	info := &relaycommon.RelayInfo{
+		Request: &dto.AudioRequest{
+			TimestampGranularities: []string{"word"},
+		},
+		VolcSpeechAudit: &relaycommon.VolcSpeechAuditInfo{},
+	}
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"X-Api-Status-Code": []string{"20000000"}},
+		Body:       ioNopCloser(body),
+	}
+
+	_, apiErr := handleVolcASRFlashResponse(context, response, info, "verbose_json")
+	require.Nil(t, apiErr)
+	var verbose dto.WhisperVerboseJSONResponse
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &verbose))
+	assert.Empty(t, verbose.Segments)
+	require.Len(t, verbose.Words, 1)
+}
+
+func TestVolcASRFlashVerboseJSONPreservesProviderWordUnits(t *testing.T) {
+	body, err := common.Marshal(volcASRFlashResponse{
+		AudioInfo: &volcASRAudioInfo{Duration: 1800},
+		Result: &volcASRResult{
+			Text: "2026年，好。",
+			Utterances: []volcASRUtterance{{
+				StartTime: 100,
+				EndTime:   1800,
+				Text:      "2026年，好。",
+				Words: []volcASRWord{
+					{StartTime: 100, EndTime: 900, Text: "2026年"},
+					{StartTime: 900, EndTime: 1100, Text: "，"},
+					{StartTime: -1, EndTime: -1, Text: " "},
+					{StartTime: 1100, EndTime: 1800, Text: "好。"},
+				},
+			}},
+		},
+	})
+	require.NoError(t, err)
+	context, recorder := newVolcSpeechTestContext()
+	info := &relaycommon.RelayInfo{
+		Request: &dto.AudioRequest{
+			TimestampGranularities: []string{"word"},
+		},
+		VolcSpeechAudit: &relaycommon.VolcSpeechAuditInfo{},
+	}
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"X-Api-Status-Code": []string{"20000000"}},
+		Body:       ioNopCloser(body),
+	}
+
+	_, apiErr := handleVolcASRFlashResponse(context, response, info, "verbose_json")
+	require.Nil(t, apiErr)
+	var verbose dto.WhisperVerboseJSONResponse
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &verbose))
+	require.Len(t, verbose.Words, 4)
+	assert.Equal(t, "2026年", verbose.Words[0].Word)
+	assert.Equal(t, "，", verbose.Words[1].Word)
+	assert.Equal(t, " ", verbose.Words[2].Word)
+	assert.Equal(t, "好。", verbose.Words[3].Word)
+	assert.InDelta(t, 0.1, verbose.Words[0].Start, 0.0001)
+	assert.InDelta(t, -0.001, verbose.Words[2].Start, 0.0001)
+	assert.InDelta(t, 1.8, verbose.Words[3].End, 0.0001)
+}
+
+func TestVolcASRFlashVerboseJSONAllowsMissingProviderWords(t *testing.T) {
+	body, err := common.Marshal(volcASRFlashResponse{
+		AudioInfo: &volcASRAudioInfo{Duration: 1000},
+		Result: &volcASRResult{
+			Text: "测试",
+			Utterances: []volcASRUtterance{{
+				StartTime: 0,
+				EndTime:   1000,
+				Text:      "测试",
+			}},
+		},
+	})
+	require.NoError(t, err)
+	context, recorder := newVolcSpeechTestContext()
+	info := &relaycommon.RelayInfo{
+		Request: &dto.AudioRequest{
+			TimestampGranularities: []string{"segment", "word"},
+		},
+		VolcSpeechAudit: &relaycommon.VolcSpeechAuditInfo{},
+	}
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"X-Api-Status-Code": []string{"20000000"}},
+		Body:       ioNopCloser(body),
+	}
+
+	_, apiErr := handleVolcASRFlashResponse(context, response, info, "verbose_json")
+	require.Nil(t, apiErr)
+	var verbose dto.WhisperVerboseJSONResponse
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &verbose))
+	require.Len(t, verbose.Segments, 1)
+	assert.Empty(t, verbose.Words)
+}
+
+func TestVolcASRFlashGeneratesSRTAndVTTFromUtterances(t *testing.T) {
+	body, err := common.Marshal(volcASRFlashResponse{
+		AudioInfo: &volcASRAudioInfo{Duration: 3500},
+		Result: &volcASRResult{
+			Text: "第一句。第二句。",
+			Utterances: []volcASRUtterance{
+				{StartTime: 450, EndTime: 1530, Text: "第一句。"},
+				{StartTime: 2000, EndTime: 3500, Text: "第二句。"},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	tests := []struct {
+		format      string
+		contentType string
+		expected    string
+	}{
+		{
+			format:      "srt",
+			contentType: "application/x-subrip; charset=utf-8",
+			expected: "1\n00:00:00,450 --> 00:00:01,530\n第一句。\n\n" +
+				"2\n00:00:02,000 --> 00:00:03,500\n第二句。\n\n",
+		},
+		{
+			format:      "vtt",
+			contentType: "text/vtt; charset=utf-8",
+			expected: "WEBVTT\n\n00:00:00.450 --> 00:00:01.530\n第一句。\n\n" +
+				"00:00:02.000 --> 00:00:03.500\n第二句。\n\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.format, func(t *testing.T) {
+			context, recorder := newVolcSpeechTestContext()
+			info := &relaycommon.RelayInfo{
+				Request:         &dto.AudioRequest{},
+				VolcSpeechAudit: &relaycommon.VolcSpeechAuditInfo{},
+			}
+			response := &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"X-Api-Status-Code": []string{"20000000"}},
+				Body:       ioNopCloser(body),
+			}
+
+			_, apiErr := handleVolcASRFlashResponse(context, response, info, test.format)
+			require.Nil(t, apiErr)
+			assert.Equal(t, test.contentType, recorder.Header().Get("Content-Type"))
+			assert.Equal(t, test.expected, recorder.Body.String())
+		})
+	}
 }
 
 func TestVolcASRFlashEmptyTranscriptStillBillsLocalDurationFallback(t *testing.T) {

@@ -69,6 +69,9 @@ Authorization: Bearer <NEW_API_TOKEN>
 | `voice` | string | 是 | 建议传 `alloy`，使用渠道配置的默认火山音色；也可直接传火山 speaker ID |
 | `response_format` | string | 否 | `mp3`、`opus` 或 `pcm`，默认 `mp3` |
 | `speed` | number | 否 | 语速范围 `0.5`–`2.0`，默认使用火山服务端语速 |
+| `stream_format` | string | 否 | `audio` 或 `sse`；默认 `audio`，请求字幕时必须为 `sse` |
+| `timestamp_granularities` | string[] | 否 | `segment`、`word`；指定后默认返回 JSON 时间轴 |
+| `subtitle_formats` | string[] | 否 | `json`、`srt`、`vtt`；指定后默认启用 segment 和 word 时间轴 |
 
 以下 OpenAI 标准音色名都会映射到渠道配置的默认火山音色：
 
@@ -86,10 +89,11 @@ shimmer
 当前不支持：
 
 - `wav`、`aac`、`flac`
-- SSE 格式的 TTS
 - 双向流式输入
 - 声音复刻
 - 通过 `metadata` 覆盖火山协议、资源 ID 或鉴权信息
+
+请求字幕或时间轴时必须同时传入 `"stream_format":"sse"`。普通裸音频请求的响应协议保持不变；在裸音频模式中传入字幕参数会返回 `400`，不会静默忽略。
 
 ### 2.3 curl 示例
 
@@ -122,7 +126,160 @@ curl https://aiapi.shenxiaokeji.com/v1/audio/speech \
   --output speech.ogg
 ```
 
-### 2.4 JavaScript 示例
+### 2.4 SSE 音频与字幕示例
+
+以下请求同时返回 Base64 音频块、句级与字词级 JSON 时间轴，以及最终 SRT/VTT：
+
+```bash
+curl -N https://aiapi.shenxiaokeji.com/v1/audio/speech \
+  -H "Authorization: Bearer ${NEW_API_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "sxh-tts",
+    "input": "你好，2026年。这里是第二句。",
+    "voice": "alloy",
+    "response_format": "mp3",
+    "stream_format": "sse",
+    "timestamp_granularities": ["segment", "word"],
+    "subtitle_formats": ["json", "srt", "vtt"]
+  }'
+```
+
+响应采用 `text/event-stream`。每个 `data:` 块都是一个 JSON 对象，事件顺序如下：
+
+```text
+speech.audio.delta
+...可以有多个音频块...
+sxh.speech.subtitle.delta
+...可以有多句字幕...
+sxh.speech.subtitle.done
+speech.audio.done
+```
+
+主要事件结构：
+
+```json
+{
+  "type": "speech.audio.delta",
+  "audio": "<BASE64_AUDIO_CHUNK>"
+}
+```
+
+```json
+{
+  "type": "sxh.speech.subtitle.delta",
+  "index": 0,
+  "text": "你好，2026年。",
+  "startTime": 0.12,
+  "endTime": 1.86,
+  "words": [
+    {
+      "word": "你好",
+      "startTime": 0.12,
+      "endTime": 0.68,
+      "confidence": 0.98
+    }
+  ]
+}
+```
+
+```json
+{
+  "type": "sxh.speech.subtitle.done",
+  "available": true,
+  "sentence_count": 2,
+  "word_count": 8,
+  "formats": {
+    "srt": "1\n00:00:00,120 --> 00:00:01,860\n你好，2026年。\n\n",
+    "vtt": "WEBVTT\n\n00:00:00.120 --> 00:00:01.860\n你好，2026年。\n\n"
+  }
+}
+```
+
+`startTime` 和 `endTime` 统一为秒。字词内容、顺序、标点、数字组合和时间区间完全保留火山返回，不保证每个 Unicode 字符都是一个独立字词。若音频成功但火山没有给出有效字幕，合成仍成功，`subtitle.done.available` 为 `false`。
+
+TypeScript 原生 `fetch` 客户端示例：
+
+```typescript
+import { writeFile } from 'node:fs/promises'
+
+type SSEEvent = {
+  type: string
+  audio?: string
+  formats?: Record<string, string>
+  [key: string]: unknown
+}
+
+const response = await fetch(
+  'https://aiapi.shenxiaokeji.com/v1/audio/speech',
+  {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${process.env.NEW_API_TOKEN}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'sxh-tts',
+      input: '你好，2026年。这里是第二句。',
+      voice: 'alloy',
+      response_format: 'mp3',
+      stream_format: 'sse',
+      timestamp_granularities: ['segment', 'word'],
+      subtitle_formats: ['json', 'srt', 'vtt'],
+    }),
+  },
+)
+
+if (!response.ok || !response.body) {
+  throw new Error(`TTS 请求失败：${response.status} ${await response.text()}`)
+}
+
+const audioChunks: Uint8Array[] = []
+const decoder = new TextDecoder()
+let pending = ''
+
+const consumeEvent = (block: string) => {
+  const data = block
+    .split('\n')
+    .filter((line) => line.startsWith('data: '))
+    .map((line) => line.slice(6))
+    .join('\n')
+  if (!data) return
+
+  const event = JSON.parse(data) as SSEEvent
+  if (event.type === 'speech.audio.delta' && event.audio) {
+    // 每个 Base64 音频块要分别解码，再按事件顺序拼接二进制。
+    audioChunks.push(Uint8Array.from(Buffer.from(event.audio, 'base64')))
+  } else if (event.type === 'sxh.speech.subtitle.delta') {
+    console.log('字幕时间轴：', event)
+  } else if (event.type === 'sxh.speech.subtitle.done') {
+    console.log('最终字幕：', event.formats)
+  } else if (event.type === 'error') {
+    throw new Error(`TTS 流中断：${JSON.stringify(event)}`)
+  }
+}
+
+for await (const chunk of response.body) {
+  pending += decoder.decode(chunk, { stream: true }).replace(/\r\n/g, '\n')
+  let boundary = pending.indexOf('\n\n')
+  while (boundary >= 0) {
+    consumeEvent(pending.slice(0, boundary))
+    pending = pending.slice(boundary + 2)
+    boundary = pending.indexOf('\n\n')
+  }
+}
+pending += decoder.decode()
+if (pending.trim()) consumeEvent(pending)
+
+await writeFile(
+  'speech.mp3',
+  Buffer.concat(audioChunks.map((chunk) => Buffer.from(chunk))),
+)
+```
+
+未修改的 OpenAI SDK 不解析 `sxh.speech.subtitle.*` 扩展事件；需要字幕时应使用原生 HTTP/SSE 客户端。只调用普通裸音频的现有 SDK 代码不受影响。
+
+### 2.5 JavaScript 裸音频示例
 
 使用官方 OpenAI JavaScript SDK：
 
@@ -147,7 +304,7 @@ const audio = Buffer.from(await response.arrayBuffer())
 await fs.writeFile('speech.mp3', audio)
 ```
 
-### 2.5 Python 示例
+### 2.6 Python 裸音频示例
 
 使用官方 OpenAI Python SDK：
 
@@ -173,7 +330,7 @@ with client.audio.speech.with_streaming_response.create(
     response.stream_to_file(output)
 ```
 
-### 2.6 TTS 响应
+### 2.7 TTS 裸音频响应
 
 接口直接返回音频二进制，不返回 JSON：
 
@@ -207,7 +364,8 @@ Authorization: Bearer <NEW_API_TOKEN>
 | --- | --- | --- | --- |
 | `model` | string | 是 | 固定为 `sxh-asr` |
 | `file` | file | 是 | 要识别的音频文件 |
-| `response_format` | string | 否 | `json`、`text` 或 `verbose_json`，默认 `json` |
+| `response_format` | string | 否 | `json`、`text`、`verbose_json`、`srt` 或 `vtt`，默认 `json` |
+| `timestamp_granularities[]` | string | 否 | `verbose_json` 专用，可重复传 `segment`、`word` |
 
 音频限制：
 
@@ -218,13 +376,26 @@ Authorization: Bearer <NEW_API_TOKEN>
 
 当前不支持：
 
-- `srt`、`vtt`
 - 实时 WebSocket ASR
 - 流式返回转写文本
 - 异步长文件识别
 - 客户端自定义火山资源 ID、鉴权或协议
 
-当前服务端固定启用数字规整、标点、语义顺滑和分段信息。客户端传入 `language`、`prompt`、`temperature` 或 `timestamp_granularities` 不会改变火山请求，不应依赖这些参数。
+当前服务端固定启用数字规整、标点、语义顺滑和分段信息。客户端传入 `language`、`prompt` 或 `temperature` 不会改变火山请求，不应依赖这些参数。
+
+时间戳参数只允许与 `response_format=verbose_json` 组合。未传 `timestamp_granularities` 时默认只返回句段级 `segments`，保持旧客户端兼容。字段名也兼容不带 `[]` 的重复表单字段：
+
+```text
+timestamp_granularities[]=segment
+timestamp_granularities[]=word
+```
+
+或：
+
+```text
+timestamp_granularities=segment
+timestamp_granularities=word
+```
 
 ### 3.3 curl 示例
 
@@ -258,6 +429,31 @@ curl https://aiapi.shenxiaokeji.com/v1/audio/transcriptions \
   -F "file=@./meeting.mp3"
 ```
 
+同时返回句段和字词时间戳：
+
+```bash
+curl https://aiapi.shenxiaokeji.com/v1/audio/transcriptions \
+  -H "Authorization: Bearer ${NEW_API_TOKEN}" \
+  -F "model=sxh-asr" \
+  -F "response_format=verbose_json" \
+  -F "timestamp_granularities[]=segment" \
+  -F "timestamp_granularities[]=word" \
+  -F "file=@./meeting.mp3"
+```
+
+直接生成 SRT：
+
+```bash
+curl https://aiapi.shenxiaokeji.com/v1/audio/transcriptions \
+  -H "Authorization: Bearer ${NEW_API_TOKEN}" \
+  -F "model=sxh-asr" \
+  -F "response_format=srt" \
+  -F "file=@./meeting.mp3" \
+  --output meeting.srt
+```
+
+生成 VTT 时把 `response_format` 改为 `vtt`，建议输出文件扩展名使用 `.vtt`。SRT/VTT 直接使用火山 `utterances` 的句子文本和时间区间，不需要额外传 timestamp granularities。
+
 ### 3.4 JavaScript 示例
 
 使用官方 OpenAI JavaScript SDK：
@@ -275,11 +471,13 @@ const result = await client.audio.transcriptions.create({
   model: 'sxh-asr',
   file: fs.createReadStream('./meeting.mp3'),
   response_format: 'verbose_json',
+  timestamp_granularities: ['segment', 'word'],
 })
 
 console.log(result.text)
 console.log(result.duration)
 console.log(result.segments)
+console.log(result.words)
 ```
 
 ### 3.5 Python 示例
@@ -301,11 +499,13 @@ with open("meeting.mp3", "rb") as audio:
         model="sxh-asr",
         file=audio,
         response_format="verbose_json",
+        timestamp_granularities=["segment", "word"],
     )
 
 print(result.text)
 print(result.duration)
 print(result.segments)
+print(result.words)
 ```
 
 ### 3.6 ASR 响应
@@ -344,11 +544,44 @@ print(result.segments)
       "compression_ratio": 0,
       "no_speech_prob": 0
     }
+  ],
+  "words": [
+    {
+      "word": "你好",
+      "start": 0.2,
+      "end": 0.74,
+      "confidence": 0.98
+    },
+    {
+      "word": "2026年",
+      "start": 0.74,
+      "end": 1.52,
+      "confidence": 0.96
+    }
   ]
 }
 ```
 
-`verbose_json` 当前提供句段级开始和结束时间，不提供可靠的 Token、置信度或逐词时间戳。响应头可能包含：
+`segments` 和顶层 `words` 的时间单位都是秒。`confidence` 只在火山返回该字段时出现。字词内容、顺序、标点、数字组合和时间区间保持火山原样，不保证每个 Unicode 字符独立成词；火山未返回 words 时，响应中也不会伪造或均分时间轴。
+
+SRT 示例：
+
+```srt
+1
+00:00:00,200 --> 00:00:03,000
+你好，这是一段录音转写结果。
+```
+
+VTT 示例：
+
+```vtt
+WEBVTT
+
+00:00:00.200 --> 00:00:03.000
+你好，这是一段录音转写结果。
+```
+
+响应头可能包含：
 
 ```http
 X-Volc-Logid: <火山请求日志 ID>
@@ -365,6 +598,8 @@ X-Volc-Logid: <火山请求日志 ID>
 - 用户分组倍率仍会参与最终扣费。
 
 调用失败通常会退回预扣额度。TTS 已经向客户端输出部分音频后如果上游连接中断，不会自动切换渠道重放，以免音频重复；该请求会记录为部分流失败并退回预扣额度。
+
+时间戳和 SRT/VTT 是同一次语音请求的附加输出，不重复计费。
 
 ## 5. 错误处理
 
@@ -397,6 +632,7 @@ X-Volc-Logid: <火山请求日志 ID>
 3. 仅对网络错误、`429` 和 `5xx` 自动重试。
 4. TTS 重试时重新创建输出文件，避免把两次响应拼接到同一个文件。
 5. ASR 请求体包含文件流，重试时必须重新打开文件，不能复用已经读取完的流。
+6. TTS SSE 收到 `error` 事件或连接在 `speech.audio.done` 前结束时，丢弃已拼接的音频和字幕；服务端不会在已经输出首字节后切换渠道。
 
 ## 6. 与 OpenAI 标准接口的差异
 
@@ -407,11 +643,12 @@ X-Volc-Logid: <火山请求日志 ID>
 | TTS 模型 | 客户端使用 `sxh-tts`，服务端映射到底层火山模型 |
 | TTS 音色 | OpenAI 六个标准名称映射到渠道默认音色，或直传火山 speaker ID |
 | TTS 格式 | MP3、Opus、PCM |
-| TTS SSE | 不支持 |
+| TTS SSE | 支持 `speech.audio.delta`、`speech.audio.done` 和 `sxh.speech.subtitle.*` 扩展事件 |
+| TTS 字幕 | 句级、字词级 JSON 时间轴，以及 SRT、VTT |
 | ASR 模型 | 客户端使用 `sxh-asr`，服务端映射到底层火山模型 |
 | ASR 输入 | WAV、MP3、OGG、Opus，最大 100MB、最长 2 小时 |
-| ASR 输出 | JSON、纯文本、Verbose JSON |
-| 字幕格式 | 不支持 SRT、VTT |
+| ASR 输出 | JSON、纯文本、Verbose JSON、SRT、VTT |
+| ASR 时间戳 | 句级和火山原始字词单元，统一为秒 |
 | ASR 实时流 | 不支持 |
 
 OpenAI SDK 只负责构造兼容请求，实际请求会发送到深效科技服务，不会发送到 OpenAI。客户端必须显式配置本文给出的 Base URL 和模型名称。

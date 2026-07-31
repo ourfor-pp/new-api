@@ -52,6 +52,14 @@ TTS 按火山返回的 `usage.text_words` 结算；仅在成功收到 `SessionFi
 ## 支持边界
 
 - TTS 输出：MP3、Opus、PCM；语速范围 0.5–2.0。
+- TTS SSE：支持标准音频 delta/done 事件；可选输出句级、字词级 JSON 时间轴和 SRT/VTT。
 - ASR 输入：WAV、MP3、OGG/Opus；最大 100MB、最长 2 小时。
-- ASR 输出：`json`、`text`、`verbose_json`。
-- 不支持实时 WebSocket ASR、异步长文件 ASR、双向 TTS、SSE、声音复刻和阿里语音。
+- ASR 输出：`json`、`text`、`verbose_json`、`srt`、`vtt`；Verbose JSON 可选句级和字词级时间戳。
+- 字幕和时间轴完全保留火山返回语义，不拆分标点或数字，不做均分、质量检测、纠偏或 forced alignment。
+- 不支持实时 WebSocket ASR、异步长文件 ASR、双向 TTS、声音复刻和阿里语音。
+
+TTS 字幕请求必须使用 `stream_format=sse`。服务端只在有字幕需求时向火山发送 `audio_params.enable_subtitle=true`；普通裸音频响应保持兼容。若音频成功但没有有效字幕，SSE 仍正常完成，并在 `sxh.speech.subtitle.done` 中返回 `available:false`。
+
+ASR 的 `timestamp_granularities[]=segment|word` 只允许与 `verbose_json` 组合；不传时默认只返回 segment。SRT/VTT 直接由火山 utterances 生成。
+
+语音日志额外记录 granularities、字幕格式、句数、字词数和 TTS 用量来源，不记录 Key、完整文本、音频或字幕正文。

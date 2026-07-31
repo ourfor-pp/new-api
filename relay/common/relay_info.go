@@ -197,13 +197,18 @@ type RelayInfo struct {
 }
 
 type VolcSpeechAuditInfo struct {
-	ResourceID      string
-	Protocol        string
-	LogID           string
-	TextWords       int
-	AudioDurationMS int64
-	BillingUnits    int
-	PartialFailure  bool
+	ResourceID             string
+	Protocol               string
+	LogID                  string
+	TextWords              int
+	AudioDurationMS        int64
+	BillingUnits           int
+	PartialFailure         bool
+	TimestampGranularities []string
+	SubtitleFormats        []string
+	SubtitleSentenceCount  int
+	SubtitleWordCount      int
+	UsageSource            string
 }
 
 // EffectiveUpstreamModelName 返回适配器实际应识别的模型。

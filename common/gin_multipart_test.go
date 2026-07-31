@@ -38,6 +38,8 @@ func TestParseMultipartFormReusableStreamsBodyStorage(t *testing.T) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	require.NoError(t, writer.WriteField("model", "doubao-seed-asr-flash"))
+	require.NoError(t, writer.WriteField("timestamp_granularities", "word"))
+	require.NoError(t, writer.WriteField("timestamp_granularities[]", "segment"))
 	part, err := writer.CreateFormFile("file", "sample.wav")
 	require.NoError(t, err)
 	_, err = part.Write([]byte("audio-data"))
@@ -51,10 +53,12 @@ func TestParseMultipartFormReusableStreamsBodyStorage(t *testing.T) {
 	context.Set(KeyBodyStorage, storage)
 
 	var request struct {
-		Model string `json:"model"`
+		Model                  string   `json:"model"`
+		TimestampGranularities []string `json:"timestamp_granularities"`
 	}
 	require.NoError(t, UnmarshalBodyReusable(context, &request))
 	assert.Equal(t, "doubao-seed-asr-flash", request.Model)
+	assert.Equal(t, []string{"word"}, request.TimestampGranularities)
 
 	form, err := ParseMultipartFormReusable(context)
 	require.NoError(t, err)

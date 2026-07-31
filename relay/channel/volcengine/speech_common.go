@@ -121,5 +121,16 @@ func setVolcSpeechAuditContext(c *gin.Context, audit *relaycommon.VolcSpeechAudi
 	if audit.PartialFailure {
 		value["partial_failure"] = true
 	}
+	if len(audit.TimestampGranularities) > 0 {
+		value["timestamp_granularities"] = audit.TimestampGranularities
+	}
+	if len(audit.SubtitleFormats) > 0 {
+		value["subtitle_formats"] = audit.SubtitleFormats
+	}
+	value["subtitle_sentence_count"] = audit.SubtitleSentenceCount
+	value["subtitle_word_count"] = audit.SubtitleWordCount
+	if audit.UsageSource != "" {
+		value["usage_source"] = audit.UsageSource
+	}
 	c.Set("volc_speech_audit", value)
 }

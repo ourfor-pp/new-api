@@ -47,6 +47,48 @@ func TestMappedVolcTTSRejectsUnsupportedFormat(t *testing.T) {
 	require.ErrorContains(t, err, "only supports mp3, opus, or pcm")
 }
 
+func TestMappedVolcTTSSubtitleOptionsRequireSSEAndApplyDefaults(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	context, _ := gin.CreateTestContext(httptest.NewRecorder())
+	context.Set("model_mapping", `{"customer-tts-alias":"`+constant.ModelDoubaoSeedTTS20+`"}`)
+	context.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/v1/audio/speech",
+		bytes.NewBufferString(`{
+			"model":"customer-tts-alias",
+			"input":"测试",
+			"voice":"speaker",
+			"stream_format":"SSE",
+			"timestamp_granularities":["WORD","segment","word"]
+		}`),
+	)
+	context.Request.Header.Set("Content-Type", "application/json")
+
+	request, err := GetAndValidAudioRequest(context, relayconstant.RelayModeAudioSpeech)
+	require.NoError(t, err)
+	assert.Equal(t, "customer-tts-alias", request.Model)
+	assert.Equal(t, "sse", request.StreamFormat)
+	assert.Equal(t, []string{"word", "segment"}, request.TimestampGranularities)
+	assert.Equal(t, []string{"json"}, request.SubtitleFormats)
+
+	context, _ = gin.CreateTestContext(httptest.NewRecorder())
+	context.Set("model_mapping", `{"customer-tts-alias":"`+constant.ModelDoubaoSeedTTS20+`"}`)
+	context.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/v1/audio/speech",
+		bytes.NewBufferString(`{
+			"model":"customer-tts-alias",
+			"input":"测试",
+			"voice":"speaker",
+			"timestamp_granularities":["word"]
+		}`),
+	)
+	context.Request.Header.Set("Content-Type", "application/json")
+
+	_, err = GetAndValidAudioRequest(context, relayconstant.RelayModeAudioSpeech)
+	require.ErrorContains(t, err, "require stream_format=sse")
+}
+
 func TestMappedVolcASRValidatesAndKeepsBusinessModel(t *testing.T) {
 	const (
 		sampleRate    = 16000
@@ -78,6 +120,9 @@ func TestMappedVolcASRValidatesAndKeepsBusinessModel(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, writer.WriteField("model", "customer-asr-alias"))
 	require.NoError(t, writer.WriteField("response_format", "verbose_json"))
+	require.NoError(t, writer.WriteField("timestamp_granularities[]", "word"))
+	require.NoError(t, writer.WriteField("timestamp_granularities[]", "segment"))
+	require.NoError(t, writer.WriteField("timestamp_granularities", "word"))
 	require.NoError(t, writer.Close())
 
 	gin.SetMode(gin.TestMode)
@@ -91,13 +136,14 @@ func TestMappedVolcASRValidatesAndKeepsBusinessModel(t *testing.T) {
 	assert.Equal(t, "customer-asr-alias", request.Model)
 	assert.Equal(t, "wav", request.LocalAudioFormat)
 	assert.Equal(t, int64(durationMS), request.LocalAudioDurationMS)
+	assert.Equal(t, []string{"word", "segment"}, request.TimestampGranularities)
 }
 
 func TestMappedVolcASRRejectsUnsupportedResponseFormatBeforeFileParsing(t *testing.T) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	require.NoError(t, writer.WriteField("model", "another-asr-alias"))
-	require.NoError(t, writer.WriteField("response_format", "srt"))
+	require.NoError(t, writer.WriteField("response_format", "diarized_json"))
 	require.NoError(t, writer.Close())
 
 	gin.SetMode(gin.TestMode)
@@ -107,5 +153,23 @@ func TestMappedVolcASRRejectsUnsupportedResponseFormatBeforeFileParsing(t *testi
 	context.Request.Header.Set("Content-Type", writer.FormDataContentType())
 
 	_, err := GetAndValidAudioRequest(context, relayconstant.RelayModeAudioTranscription)
-	require.ErrorContains(t, err, "does not support srt")
+	require.ErrorContains(t, err, "unsupported response_format")
+}
+
+func TestMappedVolcASRRejectsTimestampGranularityOutsideVerboseJSON(t *testing.T) {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	require.NoError(t, writer.WriteField("model", "customer-asr-alias"))
+	require.NoError(t, writer.WriteField("response_format", "srt"))
+	require.NoError(t, writer.WriteField("timestamp_granularities[]", "word"))
+	require.NoError(t, writer.Close())
+
+	gin.SetMode(gin.TestMode)
+	context, _ := gin.CreateTestContext(httptest.NewRecorder())
+	context.Set("model_mapping", `{"customer-asr-alias":"`+constant.ModelDoubaoSeedASRFlash+`"}`)
+	context.Request = httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", bytes.NewReader(body.Bytes()))
+	context.Request.Header.Set("Content-Type", writer.FormDataContentType())
+
+	_, err := GetAndValidAudioRequest(context, relayconstant.RelayModeAudioTranscription)
+	require.ErrorContains(t, err, "require response_format=verbose_json")
 }

@@ -66,6 +66,46 @@ func GetAndValidAudioRequest(c *gin.Context, relayMode int) (*dto.AudioRequest, 
 	if err != nil {
 		return nil, err
 	}
+	if strings.Contains(c.Request.Header.Get("Content-Type"), gin.MIMEMultipartPOSTForm) {
+		form, formErr := common.ParseMultipartFormReusable(c)
+		if formErr != nil {
+			return nil, formErr
+		}
+		audioRequest.TimestampGranularities = append(
+			audioRequest.TimestampGranularities,
+			form.Value["timestamp_granularities[]"]...,
+		)
+		_ = form.RemoveAll()
+	}
+	normalizedGranularities := make([]string, 0, len(audioRequest.TimestampGranularities))
+	seenGranularities := make(map[string]struct{}, len(audioRequest.TimestampGranularities))
+	for _, granularity := range audioRequest.TimestampGranularities {
+		granularity = strings.ToLower(strings.TrimSpace(granularity))
+		if granularity == "" {
+			continue
+		}
+		if _, exists := seenGranularities[granularity]; exists {
+			continue
+		}
+		seenGranularities[granularity] = struct{}{}
+		normalizedGranularities = append(normalizedGranularities, granularity)
+	}
+	audioRequest.TimestampGranularities = normalizedGranularities
+
+	normalizedSubtitleFormats := make([]string, 0, len(audioRequest.SubtitleFormats))
+	seenSubtitleFormats := make(map[string]struct{}, len(audioRequest.SubtitleFormats))
+	for _, subtitleFormat := range audioRequest.SubtitleFormats {
+		subtitleFormat = strings.ToLower(strings.TrimSpace(subtitleFormat))
+		if subtitleFormat == "" {
+			continue
+		}
+		if _, exists := seenSubtitleFormats[subtitleFormat]; exists {
+			continue
+		}
+		seenSubtitleFormats[subtitleFormat] = struct{}{}
+		normalizedSubtitleFormats = append(normalizedSubtitleFormats, subtitleFormat)
+	}
+	audioRequest.SubtitleFormats = normalizedSubtitleFormats
 	if audioRequest.Model == "" {
 		return nil, errors.New("model is required")
 	}
@@ -103,16 +143,53 @@ func ValidateVolcSpeechAudioRequest(c *gin.Context, relayMode int, audioRequest 
 			if audioRequest.Speed != nil && (*audioRequest.Speed < 0.5 || *audioRequest.Speed > 2.0) {
 				return errors.New("speed must be between 0.5 and 2.0")
 			}
+			audioRequest.StreamFormat = strings.ToLower(strings.TrimSpace(audioRequest.StreamFormat))
+			switch audioRequest.StreamFormat {
+			case "", "audio", "sse":
+			default:
+				return fmt.Errorf("doubao-seed-tts-2.0 only supports audio or sse stream_format")
+			}
+			for _, granularity := range audioRequest.TimestampGranularities {
+				if granularity != "segment" && granularity != "word" {
+					return fmt.Errorf("unsupported timestamp granularity for doubao-seed-tts-2.0: %s", granularity)
+				}
+			}
+			for _, subtitleFormat := range audioRequest.SubtitleFormats {
+				switch subtitleFormat {
+				case "json", "srt", "vtt":
+				default:
+					return fmt.Errorf("unsupported subtitle format for doubao-seed-tts-2.0: %s", subtitleFormat)
+				}
+			}
+			subtitleRequested := len(audioRequest.TimestampGranularities) > 0 || len(audioRequest.SubtitleFormats) > 0
+			if subtitleRequested && audioRequest.StreamFormat != "sse" {
+				return errors.New("doubao-seed-tts-2.0 timestamps and subtitles require stream_format=sse")
+			}
+			if len(audioRequest.SubtitleFormats) > 0 && len(audioRequest.TimestampGranularities) == 0 {
+				audioRequest.TimestampGranularities = []string{"segment", "word"}
+			}
+			if len(audioRequest.TimestampGranularities) > 0 && len(audioRequest.SubtitleFormats) == 0 {
+				audioRequest.SubtitleFormats = []string{"json"}
+			}
 		}
 	default:
 		if audioRequest.ResponseFormat == "" {
 			audioRequest.ResponseFormat = "json"
 		}
 		if audioRequest.Model == channelconstant.ModelDoubaoSeedASRFlash {
+			if len(audioRequest.SubtitleFormats) > 0 {
+				return errors.New("doubao-seed-asr-flash does not support subtitle_formats; use response_format=srt or vtt")
+			}
+			for _, granularity := range audioRequest.TimestampGranularities {
+				if granularity != "segment" && granularity != "word" {
+					return fmt.Errorf("unsupported timestamp granularity for doubao-seed-asr-flash: %s", granularity)
+				}
+			}
+			if len(audioRequest.TimestampGranularities) > 0 && !strings.EqualFold(audioRequest.ResponseFormat, "verbose_json") {
+				return errors.New("doubao-seed-asr-flash timestamp_granularities require response_format=verbose_json")
+			}
 			switch strings.ToLower(audioRequest.ResponseFormat) {
-			case "json", "text", "verbose_json":
-			case "srt", "vtt":
-				return fmt.Errorf("doubao-seed-asr-flash does not support %s response_format", audioRequest.ResponseFormat)
+			case "json", "text", "verbose_json", "srt", "vtt":
 			default:
 				return fmt.Errorf("unsupported response_format for doubao-seed-asr-flash: %s", audioRequest.ResponseFormat)
 			}
