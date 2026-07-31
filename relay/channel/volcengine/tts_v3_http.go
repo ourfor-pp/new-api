@@ -3,6 +3,7 @@ package volcengine
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -43,6 +44,7 @@ type volcTTSV3AudioParams struct {
 type volcTTSV3Result struct {
 	Code    int             `json:"code"`
 	Message string          `json:"message"`
+	Data    string          `json:"data,omitempty"`
 	Usage   *volcTTSV3Usage `json:"usage,omitempty"`
 }
 
@@ -51,6 +53,8 @@ type volcTTSV3Usage struct {
 }
 
 const volcTTSMaxFrameBytes = 16 << 20
+
+var volcTTSMaxJSONLineBytes = base64.StdEncoding.EncodedLen(volcTTSMaxFrameBytes) + 64*1024
 
 func resolveVolcTTSSpeaker(voice string, config *dto.VolcSpeechConfig) (string, error) {
 	voice = strings.TrimSpace(voice)
@@ -254,29 +258,54 @@ func handleVolcTTSV3Response(c *gin.Context, resp *http.Response, info *relaycom
 		c.Header("X-Volc-Logid", info.VolcSpeechAudit.LogID)
 	}
 
-	reader := bufio.NewReader(resp.Body)
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 64*1024), volcTTSMaxJSONLineBytes)
 	wroteAudio := false
 	finished := false
 	textWords := 0
 	usagePresent := false
-	for {
-		message, readErr := readVolcTTSV3Frame(reader)
-		if readErr != nil {
-			if errors.Is(readErr, io.EOF) && finished {
-				break
-			}
-			return nil, volcTTSStreamError(c, info, wroteAudio, fmt.Errorf("volcengine TTS stream interrupted: %w", readErr), http.StatusBadGateway)
+	for scanner.Scan() {
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
+			continue
 		}
-		switch message.MsgType {
-		case MsgTypeAudioOnlyServer:
-			if len(message.Payload) == 0 {
+
+		var result volcTTSV3Result
+		if unmarshalErr := common.Unmarshal(line, &result); unmarshalErr != nil {
+			return nil, volcTTSStreamError(c, info, wroteAudio, fmt.Errorf("invalid volcengine TTS JSON chunk: %w", unmarshalErr), http.StatusBadGateway)
+		}
+		if result.Code != 0 && result.Code != 20000000 {
+			return nil, volcTTSStreamError(
+				c,
+				info,
+				wroteAudio,
+				fmt.Errorf("volcengine TTS failed: code=%d message=%s", result.Code, result.Message),
+				volcSpeechProviderStatus(result.Code, result.Message),
+			)
+		}
+
+		if result.Data != "" {
+			if base64.StdEncoding.DecodedLen(len(result.Data)) > volcTTSMaxFrameBytes {
+				return nil, volcTTSStreamError(
+					c,
+					info,
+					wroteAudio,
+					fmt.Errorf("volcengine TTS audio chunk exceeds %d bytes", volcTTSMaxFrameBytes),
+					http.StatusBadGateway,
+				)
+			}
+			audio, decodeErr := base64.StdEncoding.DecodeString(result.Data)
+			if decodeErr != nil {
+				return nil, volcTTSStreamError(c, info, wroteAudio, fmt.Errorf("invalid volcengine TTS base64 audio: %w", decodeErr), http.StatusBadGateway)
+			}
+			if len(audio) == 0 {
 				continue
 			}
 			if !wroteAudio {
 				c.Header("Content-Type", contentType)
 				c.Header("Transfer-Encoding", "chunked")
 			}
-			written, writeErr := c.Writer.Write(message.Payload)
+			written, writeErr := c.Writer.Write(audio)
 			if written > 0 {
 				wroteAudio = true
 				c.Writer.Flush()
@@ -284,44 +313,22 @@ func handleVolcTTSV3Response(c *gin.Context, resp *http.Response, info *relaycom
 			if writeErr != nil {
 				return nil, volcTTSStreamError(c, info, wroteAudio, fmt.Errorf("failed to write TTS audio: %w", writeErr), 499)
 			}
-			if written != len(message.Payload) {
+			if written != len(audio) {
 				return nil, volcTTSStreamError(c, info, wroteAudio, io.ErrShortWrite, 499)
 			}
-		case MsgTypeError:
-			return nil, volcTTSStreamError(
-				c,
-				info,
-				wroteAudio,
-				fmt.Errorf("volcengine TTS error frame: code=%d", message.ErrorCode),
-				volcSpeechProviderStatus(int(message.ErrorCode), string(message.Payload)),
-			)
-		case MsgTypeFullServerResponse:
-			if message.EventType != EventType_SessionFinished && message.EventType != EventType_SessionFailed &&
-				message.EventType != EventType_ConnectionFailed {
-				continue
-			}
-			var result volcTTSV3Result
-			if unmarshalErr := common.Unmarshal(message.Payload, &result); unmarshalErr != nil {
-				return nil, volcTTSStreamError(c, info, wroteAudio, fmt.Errorf("invalid volcengine TTS result: %w", unmarshalErr), http.StatusBadGateway)
-			}
-			if message.EventType != EventType_SessionFinished || (result.Code != 0 && result.Code != 20000000) {
-				return nil, volcTTSStreamError(
-					c,
-					info,
-					wroteAudio,
-					fmt.Errorf("volcengine TTS failed: code=%d message=%s", result.Code, result.Message),
-					volcSpeechProviderStatus(result.Code, result.Message),
-				)
-			}
+		}
+
+		if result.Code == 20000000 {
 			finished = true
 			if result.Usage != nil {
 				usagePresent = true
 				textWords = result.Usage.TextWords
 			}
-		}
-		if finished {
 			break
 		}
+	}
+	if scanErr := scanner.Err(); scanErr != nil {
+		return nil, volcTTSStreamError(c, info, wroteAudio, fmt.Errorf("volcengine TTS stream interrupted: %w", scanErr), http.StatusBadGateway)
 	}
 
 	if !wroteAudio {

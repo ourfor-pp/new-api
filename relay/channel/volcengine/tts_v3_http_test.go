@@ -2,10 +2,11 @@ package volcengine
 
 import (
 	"bytes"
-	"encoding/binary"
+	"encoding/base64"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -19,16 +20,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func buildVolcV3TestFrame(t *testing.T, msgType MsgType, event EventType, payload []byte) []byte {
+func buildVolcTTSJSONLine(t *testing.T, result volcTTSV3Result) []byte {
 	t.Helper()
-	message, err := NewMessage(msgType, MsgTypeFlagWithEvent)
+	payload, err := common.Marshal(result)
 	require.NoError(t, err)
-	message.EventType = event
-	message.SessionID = "session-id"
-	message.Payload = payload
-	frame, err := message.Marshal()
-	require.NoError(t, err)
-	return frame
+	return append(payload, '\n')
 }
 
 func newVolcSpeechTestContext() (*gin.Context, *httptest.ResponseRecorder) {
@@ -93,18 +89,14 @@ func TestVolcTTSV3ValidationRejectsUnsupportedFormatAndSpeed(t *testing.T) {
 	require.ErrorContains(t, err, "speed must be between")
 }
 
-func TestVolcTTSV3ChunkedStreamsMultipleFramesAndUsesProviderUsage(t *testing.T) {
+func TestVolcTTSV3ChunkedStreamsMultipleJSONLinesAndUsesProviderUsage(t *testing.T) {
 	audioOne := []byte("audio-one")
 	audioTwo := []byte("audio-two")
-	finishPayload, err := common.Marshal(volcTTSV3Result{
-		Code:  20000000,
-		Usage: &volcTTSV3Usage{TextWords: 17},
-	})
-	require.NoError(t, err)
 	stream := bytes.Join([][]byte{
-		buildVolcV3TestFrame(t, MsgTypeAudioOnlyServer, EventType_TTSResponse, audioOne),
-		buildVolcV3TestFrame(t, MsgTypeAudioOnlyServer, EventType_TTSResponse, audioTwo),
-		buildVolcV3TestFrame(t, MsgTypeFullServerResponse, EventType_SessionFinished, finishPayload),
+		buildVolcTTSJSONLine(t, volcTTSV3Result{Code: 0, Data: base64.StdEncoding.EncodeToString(audioOne)}),
+		buildVolcTTSJSONLine(t, volcTTSV3Result{Code: 0, Data: base64.StdEncoding.EncodeToString(audioTwo)}),
+		buildVolcTTSJSONLine(t, volcTTSV3Result{Code: 0}),
+		buildVolcTTSJSONLine(t, volcTTSV3Result{Code: 20000000, Usage: &volcTTSV3Usage{TextWords: 17}}),
 	}, nil)
 
 	var receivedHeader http.Header
@@ -145,11 +137,9 @@ func TestVolcTTSV3ChunkedStreamsMultipleFramesAndUsesProviderUsage(t *testing.T)
 }
 
 func TestVolcTTSV3SuccessfulFinishWithoutUsageFallsBackToUnicodeCharacters(t *testing.T) {
-	finishPayload, err := common.Marshal(volcTTSV3Result{Code: 20000000})
-	require.NoError(t, err)
 	stream := bytes.Join([][]byte{
-		buildVolcV3TestFrame(t, MsgTypeAudioOnlyServer, EventType_TTSResponse, []byte("audio")),
-		buildVolcV3TestFrame(t, MsgTypeFullServerResponse, EventType_SessionFinished, finishPayload),
+		buildVolcTTSJSONLine(t, volcTTSV3Result{Code: 0, Data: base64.StdEncoding.EncodeToString([]byte("audio"))}),
+		buildVolcTTSJSONLine(t, volcTTSV3Result{Code: 20000000}),
 	}, nil)
 	context, _ := newVolcSpeechTestContext()
 	info := &relaycommon.RelayInfo{
@@ -165,7 +155,10 @@ func TestVolcTTSV3SuccessfulFinishWithoutUsageFallsBackToUnicodeCharacters(t *te
 }
 
 func TestVolcTTSV3InterruptedAfterAudioIsPartialAndNotRetryable(t *testing.T) {
-	stream := buildVolcV3TestFrame(t, MsgTypeAudioOnlyServer, EventType_TTSResponse, []byte("partial-audio"))
+	stream := buildVolcTTSJSONLine(t, volcTTSV3Result{
+		Code: 0,
+		Data: base64.StdEncoding.EncodeToString([]byte("partial-audio")),
+	})
 	context, recorder := newVolcSpeechTestContext()
 	info := &relaycommon.RelayInfo{
 		Request:         &dto.AudioRequest{Input: "测试"},
@@ -195,7 +188,10 @@ func TestVolcTTSV3ClientWriteFailureMarksPartialFailure(t *testing.T) {
 }
 
 func TestVolcTTSV3FirstPartialWriteIsNotRetryable(t *testing.T) {
-	stream := buildVolcV3TestFrame(t, MsgTypeAudioOnlyServer, EventType_TTSResponse, []byte("partial-audio"))
+	stream := buildVolcTTSJSONLine(t, volcTTSV3Result{
+		Code: 0,
+		Data: base64.StdEncoding.EncodeToString([]byte("partial-audio")),
+	})
 	recorder := &partialWriteRecorder{
 		ResponseRecorder: httptest.NewRecorder(),
 		maxBytes:         4,
@@ -218,19 +214,40 @@ func TestVolcTTSV3FirstPartialWriteIsNotRetryable(t *testing.T) {
 	assert.Equal(t, "part", recorder.Body.String())
 }
 
-func TestVolcTTSV3RejectsOversizedFrameBeforeReadingPayload(t *testing.T) {
-	frame := []byte{
-		0x11,
-		byte(MsgTypeAudioOnlyServer << 4),
-		byte(SerializationJSON << 4),
-		0,
+func TestVolcTTSV3RejectsOversizedJSONLineBeforeWritingAudio(t *testing.T) {
+	context, recorder := newVolcSpeechTestContext()
+	info := &relaycommon.RelayInfo{
+		Request:         &dto.AudioRequest{Input: "测试"},
+		OriginModelName: channelconstant.ModelDoubaoSeedTTS20,
+		VolcSpeechAudit: &relaycommon.VolcSpeechAuditInfo{ResourceID: volcTTSResourceID, Protocol: volcTTSProtocol},
 	}
-	size := make([]byte, 4)
-	binary.BigEndian.PutUint32(size, uint32(volcTTSMaxFrameBytes+1))
-	frame = append(frame, size...)
+	stream := strings.Repeat("A", volcTTSMaxJSONLineBytes+1) + "\n"
+	response := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(stream))}
 
-	_, err := readVolcTTSV3Frame(bytes.NewReader(frame))
-	require.ErrorContains(t, err, "frame exceeds")
+	usage, apiErr := handleVolcTTSV3Response(context, response, info, "mp3")
+	assert.Nil(t, usage)
+	require.NotNil(t, apiErr)
+	assert.Contains(t, apiErr.Error(), "token too long")
+	assert.False(t, types.IsSkipRetryError(apiErr))
+	assert.Empty(t, recorder.Body.Bytes())
+}
+
+func TestVolcTTSV3ProviderErrorBeforeAudioIsRetryable(t *testing.T) {
+	context, recorder := newVolcSpeechTestContext()
+	info := &relaycommon.RelayInfo{
+		Request:         &dto.AudioRequest{Input: "测试"},
+		OriginModelName: channelconstant.ModelDoubaoSeedTTS20,
+		VolcSpeechAudit: &relaycommon.VolcSpeechAuditInfo{ResourceID: volcTTSResourceID, Protocol: volcTTSProtocol},
+	}
+	stream := buildVolcTTSJSONLine(t, volcTTSV3Result{Code: 45000030, Message: "requested resource not granted"})
+	response := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader(stream))}
+
+	usage, apiErr := handleVolcTTSV3Response(context, response, info, "mp3")
+	assert.Nil(t, usage)
+	require.NotNil(t, apiErr)
+	assert.Contains(t, apiErr.Error(), "45000030")
+	assert.False(t, types.IsSkipRetryError(apiErr))
+	assert.Empty(t, recorder.Body.Bytes())
 }
 
 func TestVolcSpeechModelRoutesDoNotChangeLegacyTTSURL(t *testing.T) {
