@@ -47,6 +47,111 @@ func TestMappedVolcTTSRejectsUnsupportedFormat(t *testing.T) {
 	require.ErrorContains(t, err, "only supports mp3, opus, or pcm")
 }
 
+func TestMappedVolcTTSSpeechOptionsPreserveSampleRateAndRejectUnknownFields(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	context, _ := gin.CreateTestContext(httptest.NewRecorder())
+	context.Set("model_mapping", `{"customer-tts-alias":"`+constant.ModelDoubaoSeedTTS20+`"}`)
+	context.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/v1/audio/speech",
+		bytes.NewBufferString(`{
+			"model":"customer-tts-alias",
+			"input":"测试",
+			"voice":"speaker",
+			"instructions":"请自然地说",
+			"speech_options":{
+				"sample_rate":16000,
+				"context":{"texts":["上一轮对话"]}
+			}
+		}`),
+	)
+	context.Request.Header.Set("Content-Type", "application/json")
+
+	request, err := GetAndValidAudioRequest(context, relayconstant.RelayModeAudioSpeech)
+	require.NoError(t, err)
+	require.NotNil(t, request.SpeechOptions)
+	require.NotNil(t, request.SpeechOptions.SampleRate)
+	assert.Equal(t, 16000, *request.SpeechOptions.SampleRate)
+	require.NotNil(t, request.SpeechOptions.Context)
+	assert.Equal(t, []string{"上一轮对话"}, request.SpeechOptions.Context.Texts)
+
+	context, _ = gin.CreateTestContext(httptest.NewRecorder())
+	context.Set("model_mapping", `{"customer-tts-alias":"`+constant.ModelDoubaoSeedTTS20+`"}`)
+	context.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/v1/audio/speech",
+		bytes.NewBufferString(`{
+			"model":"customer-tts-alias",
+			"input":"测试",
+			"voice":"speaker",
+			"speech_options":{"provider_payload":{"resource_id":"forbidden"}}
+		}`),
+	)
+	context.Request.Header.Set("Content-Type", "application/json")
+
+	_, err = GetAndValidAudioRequest(context, relayconstant.RelayModeAudioSpeech)
+	require.ErrorContains(t, err, "unknown speech_options field: provider_payload")
+}
+
+func TestMappedVolcTTSRejectsASROnlyAndUnverifiedContextOptions(t *testing.T) {
+	tests := []struct {
+		name    string
+		options string
+		message string
+	}{
+		{
+			name:    "ASR option",
+			options: `{"punctuation":false}`,
+			message: "speech_options.punctuation is not supported",
+		},
+		{
+			name:    "image context",
+			options: `{"context":{"images":[{"image_url":"https://example.com/image.png"}]}}`,
+			message: "context.images is not supported",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			context, _ := gin.CreateTestContext(httptest.NewRecorder())
+			context.Set("model_mapping", `{"customer-tts-alias":"`+constant.ModelDoubaoSeedTTS20+`"}`)
+			context.Request = httptest.NewRequest(
+				http.MethodPost,
+				"/v1/audio/speech",
+				bytes.NewBufferString(`{
+					"model":"customer-tts-alias",
+					"input":"测试",
+					"voice":"speaker",
+					"speech_options":`+test.options+`
+				}`),
+			)
+			context.Request.Header.Set("Content-Type", "application/json")
+
+			_, err := GetAndValidAudioRequest(context, relayconstant.RelayModeAudioSpeech)
+			require.ErrorContains(t, err, test.message)
+		})
+	}
+}
+
+func TestNonVolcAudioModelRejectsSpeechOptions(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	context, _ := gin.CreateTestContext(httptest.NewRecorder())
+	context.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/v1/audio/speech",
+		bytes.NewBufferString(`{
+			"model":"tts-1",
+			"input":"test",
+			"voice":"alloy",
+			"speech_options":{"sample_rate":16000}
+		}`),
+	)
+	context.Request.Header.Set("Content-Type", "application/json")
+
+	_, err := GetAndValidAudioRequest(context, relayconstant.RelayModeAudioSpeech)
+	require.ErrorContains(t, err, "speech_options is not supported for model tts-1")
+}
+
 func TestMappedVolcTTSSubtitleOptionsRequireSSEAndApplyDefaults(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	context, _ := gin.CreateTestContext(httptest.NewRecorder())

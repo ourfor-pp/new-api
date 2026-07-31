@@ -98,6 +98,32 @@ func TestBuildVolcTTSV3RequestMapsOnlyStandardVoices(t *testing.T) {
 	assert.True(t, types.IsChannelError(channelConfigErr))
 }
 
+func TestBuildVolcTTSV3RequestMapsSampleRateAndOrderedContext(t *testing.T) {
+	sampleRate := 16000
+	request, _, err := buildVolcTTSV3Request(dto.AudioRequest{
+		Input:          "本轮合成文本",
+		Voice:          "speaker",
+		ResponseFormat: "mp3",
+		Instructions:   "请用平静的语气回答",
+		SpeechOptions: &dto.SpeechOptions{
+			SampleRate: &sampleRate,
+			Context: &dto.SpeechOptionsContext{
+				Texts: []string{"第一轮上文", "第二轮上文"},
+			},
+		},
+	}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 16000, request.ReqParams.AudioParams.SampleRate)
+	require.NotEmpty(t, request.ReqParams.Additions)
+
+	var additions struct {
+		ContextTexts []string `json:"context_texts"`
+	}
+	require.NoError(t, common.Unmarshal([]byte(request.ReqParams.Additions), &additions))
+	assert.Equal(t, []string{"第一轮上文\n第二轮上文\n请用平静的语气回答"}, additions.ContextTexts)
+	assert.NotContains(t, request.ReqParams.Additions, "本轮合成文本")
+}
+
 func TestBuildVolcTTSV3RequestEnablesSubtitleOnlyWhenRequested(t *testing.T) {
 	request, _, err := buildVolcTTSV3Request(dto.AudioRequest{
 		Input:                  "测试文本",

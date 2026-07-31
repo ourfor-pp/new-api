@@ -1,6 +1,7 @@
 package helper
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -61,6 +62,9 @@ func GetAndValidateRequest(c *gin.Context, format types.RelayFormat) (request dt
 }
 
 func GetAndValidAudioRequest(c *gin.Context, relayMode int) (*dto.AudioRequest, error) {
+	if err := validateSpeechOptionsFields(c); err != nil {
+		return nil, err
+	}
 	audioRequest := &dto.AudioRequest{}
 	err := common.UnmarshalBodyReusable(c, audioRequest)
 	if err != nil {
@@ -110,8 +114,120 @@ func GetAndValidAudioRequest(c *gin.Context, relayMode int) (*dto.AudioRequest, 
 	return audioRequest, err
 }
 
+func validateSpeechOptionsFields(c *gin.Context) error {
+	var speechOptionsData []byte
+	contentType := c.Request.Header.Get("Content-Type")
+	if strings.Contains(contentType, gin.MIMEMultipartPOSTForm) {
+		form, err := common.ParseMultipartFormReusable(c)
+		if err != nil {
+			return err
+		}
+		values := form.Value["speech_options"]
+		if len(values) == 0 {
+			return nil
+		}
+		if len(values) != 1 {
+			return errors.New("speech_options must be provided exactly once")
+		}
+		speechOptionsData = []byte(values[0])
+	} else {
+		storage, err := common.GetBodyStorage(c)
+		if err != nil {
+			return err
+		}
+		body, err := storage.Bytes()
+		if err != nil {
+			return err
+		}
+		var envelope map[string]json.RawMessage
+		if err := common.Unmarshal(body, &envelope); err != nil {
+			return err
+		}
+		raw, exists := envelope["speech_options"]
+		if !exists || string(raw) == "null" {
+			return nil
+		}
+		speechOptionsData = raw
+	}
+
+	var fields map[string]json.RawMessage
+	if err := common.Unmarshal(speechOptionsData, &fields); err != nil {
+		return fmt.Errorf("speech_options must be a JSON object: %w", err)
+	}
+	allowedFields := map[string]struct{}{
+		"sample_rate": {}, "text_normalization": {}, "punctuation": {},
+		"semantic_smoothing": {}, "sensitive_word_filter": {},
+		"vad_segmentation": {}, "speaker_diarization": {}, "channel_mode": {},
+		"force_segment_after_ms": {}, "hotwords": {}, "replacements": {},
+		"detect": {}, "context": {},
+	}
+	for field := range fields {
+		if _, ok := allowedFields[field]; !ok {
+			return fmt.Errorf("unknown speech_options field: %s", field)
+		}
+	}
+	providedFields := make(map[string]struct{}, len(fields))
+	for field := range fields {
+		providedFields[field] = struct{}{}
+	}
+	c.Set("speech_options_provided_fields", providedFields)
+
+	contextData, exists := fields["context"]
+	if !exists || string(contextData) == "null" {
+		return nil
+	}
+	var contextFields map[string]json.RawMessage
+	if err := common.Unmarshal(contextData, &contextFields); err != nil {
+		return fmt.Errorf("speech_options.context must be a JSON object: %w", err)
+	}
+	for field := range contextFields {
+		if field != "texts" && field != "images" {
+			return fmt.Errorf("unknown speech_options.context field: %s", field)
+		}
+		providedFields["context."+field] = struct{}{}
+	}
+
+	imagesData, exists := contextFields["images"]
+	if !exists || string(imagesData) == "null" {
+		return nil
+	}
+	var images []map[string]json.RawMessage
+	if err := common.Unmarshal(imagesData, &images); err != nil {
+		return fmt.Errorf("speech_options.context.images must be an array: %w", err)
+	}
+	for _, image := range images {
+		for field := range image {
+			if field != "image_url" {
+				return fmt.Errorf("unknown speech_options.context.images field: %s", field)
+			}
+		}
+	}
+	return nil
+}
+
+func speechOptionFieldProvided(c *gin.Context, field string) bool {
+	value, exists := c.Get("speech_options_provided_fields")
+	if !exists {
+		return false
+	}
+	fields, ok := value.(map[string]struct{})
+	if !ok {
+		return false
+	}
+	_, exists = fields[field]
+	return exists
+}
+
 // ValidateVolcSpeechAudioRequest 按映射后的上游模型执行火山语音专用校验。
 func ValidateVolcSpeechAudioRequest(c *gin.Context, relayMode int, audioRequest *dto.AudioRequest) error {
+	if audioRequest.SpeechOptions != nil {
+		supported := relayMode == relayconstant.RelayModeAudioSpeech &&
+			audioRequest.Model == channelconstant.ModelDoubaoSeedTTS20
+		if !supported {
+			return fmt.Errorf("speech_options is not supported for model %s in this audio operation", audioRequest.Model)
+		}
+	}
+
 	switch relayMode {
 	case relayconstant.RelayModeAudioSpeech:
 		if audioRequest.Model == channelconstant.ModelDoubaoSeedTTS20 {
@@ -131,6 +247,45 @@ func ValidateVolcSpeechAudioRequest(c *gin.Context, relayMode int, audioRequest 
 			}
 			if audioRequest.Speed != nil && (*audioRequest.Speed < 0.5 || *audioRequest.Speed > 2.0) {
 				return errors.New("speed must be between 0.5 and 2.0")
+			}
+			if audioRequest.SpeechOptions != nil {
+				for _, field := range []string{
+					"text_normalization", "punctuation", "semantic_smoothing",
+					"sensitive_word_filter", "vad_segmentation", "speaker_diarization",
+					"channel_mode", "force_segment_after_ms", "hotwords",
+					"replacements", "detect",
+				} {
+					if speechOptionFieldProvided(c, field) {
+						return fmt.Errorf("speech_options.%s is not supported for doubao-seed-tts-2.0", field)
+					}
+				}
+				if speechOptionFieldProvided(c, "context.images") {
+					return errors.New("speech_options.context.images is not supported by the current unidirectional TTS resource")
+				}
+				if audioRequest.SpeechOptions.SampleRate != nil {
+					switch *audioRequest.SpeechOptions.SampleRate {
+					case 8000, 16000, 24000:
+					default:
+						return errors.New("speech_options.sample_rate must be 8000, 16000, or 24000")
+					}
+				}
+				if audioRequest.SpeechOptions.Context != nil {
+					if len(audioRequest.SpeechOptions.Context.Texts) > 20 {
+						return errors.New("speech_options.context.texts must contain at most 20 entries")
+					}
+					totalContextBytes := 0
+					for index, text := range audioRequest.SpeechOptions.Context.Texts {
+						text = strings.TrimSpace(text)
+						if text == "" {
+							return fmt.Errorf("speech_options.context.texts[%d] must not be empty", index)
+						}
+						audioRequest.SpeechOptions.Context.Texts[index] = text
+						totalContextBytes += len(text)
+					}
+					if totalContextBytes > 8000 {
+						return errors.New("speech_options.context.texts must not exceed 8000 UTF-8 bytes in total")
+					}
+				}
 			}
 			audioRequest.StreamFormat = strings.ToLower(strings.TrimSpace(audioRequest.StreamFormat))
 			switch audioRequest.StreamFormat {
