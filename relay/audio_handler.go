@@ -59,26 +59,7 @@ func AudioHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		httpResp = resp.(*http.Response)
 		if info.VolcSpeechAudit != nil {
 			info.VolcSpeechAudit.LogID = httpResp.Header.Get("X-Tt-Logid")
-			volcSpeechAudit := map[string]interface{}{
-				"resource_id":   info.VolcSpeechAudit.ResourceID,
-				"protocol":      info.VolcSpeechAudit.Protocol,
-				"billing_units": info.VolcSpeechAudit.BillingUnits,
-			}
-			if info.VolcSpeechAudit.LogID != "" {
-				volcSpeechAudit["log_id"] = info.VolcSpeechAudit.LogID
-			}
-			if len(info.VolcSpeechAudit.TimestampGranularities) > 0 {
-				volcSpeechAudit["timestamp_granularities"] = info.VolcSpeechAudit.TimestampGranularities
-			}
-			if len(info.VolcSpeechAudit.SubtitleFormats) > 0 {
-				volcSpeechAudit["subtitle_formats"] = info.VolcSpeechAudit.SubtitleFormats
-			}
-			volcSpeechAudit["subtitle_sentence_count"] = info.VolcSpeechAudit.SubtitleSentenceCount
-			volcSpeechAudit["subtitle_word_count"] = info.VolcSpeechAudit.SubtitleWordCount
-			if info.VolcSpeechAudit.UsageSource != "" {
-				volcSpeechAudit["usage_source"] = info.VolcSpeechAudit.UsageSource
-			}
-			c.Set("volc_speech_audit", volcSpeechAudit)
+			c.Set("volc_speech_audit", info.VolcSpeechAudit.LogValue())
 		}
 		if httpResp.StatusCode != http.StatusOK {
 			newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)

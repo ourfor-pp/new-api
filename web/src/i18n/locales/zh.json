@@ -5218,6 +5218,9 @@
     "Zoom": "缩放",
     "Seed-TTS 2.0 default speaker ID": "Seed-TTS 2.0 默认音色 ID",
     "Enter a VolcEngine Seed-TTS 2.0 speaker ID": "请输入火山 Seed-TTS 2.0 音色 ID",
-    "Used when clients send an OpenAI standard voice such as alloy. A VolcEngine speaker ID sent by the client is passed through unchanged.": "客户端传 alloy 等 OpenAI 标准音色时使用；客户端直接传火山音色 ID 时将保持原值透传。"
+    "Used when clients send an OpenAI standard voice such as alloy. A VolcEngine speaker ID sent by the client is passed through unchanged.": "客户端传 alloy 等 OpenAI 标准音色时使用；客户端直接传火山音色 ID 时将保持原值透传。",
+    "ASR platform hotword table ID": "ASR 平台热词表 ID",
+    "Enter a VolcEngine ASR hotword table ID": "请输入火山引擎 ASR 热词表 ID",
+    "Configured on the channel and never accepted from client requests.": "该配置仅保存在渠道中，不接受客户端请求传入。"
   }
 }

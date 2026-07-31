@@ -5218,6 +5218,9 @@
     "Zoom": "Zoom",
     "Seed-TTS 2.0 default speaker ID": "Seed-TTS 2.0 default speaker ID",
     "Enter a VolcEngine Seed-TTS 2.0 speaker ID": "Enter a VolcEngine Seed-TTS 2.0 speaker ID",
-    "Used when clients send an OpenAI standard voice such as alloy. A VolcEngine speaker ID sent by the client is passed through unchanged.": "Used when clients send an OpenAI standard voice such as alloy. A VolcEngine speaker ID sent by the client is passed through unchanged."
+    "Used when clients send an OpenAI standard voice such as alloy. A VolcEngine speaker ID sent by the client is passed through unchanged.": "Utilisé lorsque les clients envoient une voix OpenAI standard telle que alloy. Un ID de voix VolcEngine envoyé par le client est transmis sans modification.",
+    "ASR platform hotword table ID": "ID de la table de mots-clés ASR de la plateforme",
+    "Enter a VolcEngine ASR hotword table ID": "Saisissez un ID de table de mots-clés ASR VolcEngine",
+    "Configured on the channel and never accepted from client requests.": "Configuré sur le canal et jamais accepté depuis les requêtes clientes."
   }
 }

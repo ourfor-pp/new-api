@@ -3,11 +3,13 @@ package volcengine
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -29,16 +31,28 @@ type volcASRUser struct {
 }
 
 type volcASRAudio struct {
-	Data   string `json:"data"`
-	Format string `json:"format"`
+	Data    string `json:"data"`
+	Format  string `json:"format"`
+	Channel *int   `json:"channel,omitempty"`
 }
 
 type volcASRRequest struct {
-	ModelName      string `json:"model_name"`
-	EnableITN      bool   `json:"enable_itn"`
-	EnablePunc     bool   `json:"enable_punc"`
-	EnableDDC      bool   `json:"enable_ddc"`
-	ShowUtterances bool   `json:"show_utterances"`
+	ModelName            string         `json:"model_name"`
+	EnableITN            *bool          `json:"enable_itn,omitempty"`
+	EnablePunc           *bool          `json:"enable_punc,omitempty"`
+	EnableDDC            *bool          `json:"enable_ddc,omitempty"`
+	ShowUtterances       *bool          `json:"show_utterances,omitempty"`
+	EnableSpeakerInfo    *bool          `json:"enable_speaker_info,omitempty"`
+	EnableChannelSplit   *bool          `json:"enable_channel_split,omitempty"`
+	SensitiveWordsFilter string         `json:"sensitive_words_filter,omitempty"`
+	VADSegmentDuration   *int           `json:"vad_segment_duration,omitempty"`
+	EndWindowSize        *int           `json:"end_window_size,omitempty"`
+	Corpus               *volcASRCorpus `json:"corpus,omitempty"`
+}
+
+type volcASRCorpus struct {
+	BoostingTableID string `json:"boosting_table_id,omitempty"`
+	Context         string `json:"context,omitempty"`
 }
 
 type volcASRFlashResponse struct {
@@ -56,10 +70,11 @@ type volcASRResult struct {
 }
 
 type volcASRUtterance struct {
-	StartTime int64         `json:"start_time"`
-	EndTime   int64         `json:"end_time"`
-	Text      string        `json:"text"`
-	Words     []volcASRWord `json:"words,omitempty"`
+	StartTime int64                   `json:"start_time"`
+	EndTime   int64                   `json:"end_time"`
+	Text      string                  `json:"text"`
+	Words     []volcASRWord           `json:"words,omitempty"`
+	Additions *volcASRResultAdditions `json:"additions,omitempty"`
 }
 
 type volcASRWord struct {
@@ -67,6 +82,11 @@ type volcASRWord struct {
 	EndTime    int64    `json:"end_time"`
 	Text       string   `json:"text"`
 	Confidence *float64 `json:"confidence,omitempty"`
+}
+
+type volcASRResultAdditions struct {
+	Speaker   json.RawMessage `json:"speaker,omitempty"`
+	ChannelID json.RawMessage `json:"channel_id,omitempty"`
 }
 
 const volcASRAudioDataPlaceholder = "__NEW_API_VOLC_ASR_AUDIO_DATA__"
@@ -83,7 +103,7 @@ func (b *volcASRRequestBody) ContentLength() int64 {
 	return b.contentLength
 }
 
-func buildVolcASRFlashRequestBody(c *gin.Context, request dto.AudioRequest) (*volcASRRequestBody, error) {
+func buildVolcASRFlashRequestBody(c *gin.Context, request dto.AudioRequest, config *dto.VolcSpeechConfig) (*volcASRRequestBody, error) {
 	form, err := common.ParseMultipartFormReusable(c)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse audio form: %w", err)
@@ -104,15 +124,108 @@ func buildVolcASRFlashRequestBody(c *gin.Context, request dto.AudioRequest) (*vo
 		return nil, fmt.Errorf("failed to open audio file: %w", err)
 	}
 
+	enableITN := true
+	enablePunc := true
+	enableDDC := true
+	showUtterances := true
+	var enableSpeakerInfo *bool
+	var enableChannelSplit *bool
+	var channel *int
+	var sensitiveWordsFilter string
+	var vadSegmentDuration *int
+	var endWindowSize *int
+	contextPayload := map[string]any{}
+	if request.SpeechOptions != nil {
+		if request.SpeechOptions.TextNormalization != nil {
+			enableITN = *request.SpeechOptions.TextNormalization
+		}
+		if request.SpeechOptions.Punctuation != nil {
+			enablePunc = *request.SpeechOptions.Punctuation
+		}
+		if request.SpeechOptions.SemanticSmoothing != nil {
+			enableDDC = *request.SpeechOptions.SemanticSmoothing
+		}
+		enableSpeakerInfo = request.SpeechOptions.SpeakerDiarization
+		if request.SpeechOptions.ChannelMode != "" {
+			separate := request.SpeechOptions.ChannelMode == "separate"
+			enableChannelSplit = &separate
+			if separate {
+				twoChannels := 2
+				channel = &twoChannels
+			}
+		}
+		if request.SpeechOptions.SensitiveWordFilter != nil {
+			filter, marshalErr := common.Marshal(map[string]bool{
+				"system_reserved_filter": *request.SpeechOptions.SensitiveWordFilter,
+			})
+			if marshalErr != nil {
+				_ = file.Close()
+				_ = form.RemoveAll()
+				return nil, fmt.Errorf("failed to marshal sensitive word filter: %w", marshalErr)
+			}
+			sensitiveWordsFilter = string(filter)
+		}
+		if request.SpeechOptions.VADSegmentation != nil && *request.SpeechOptions.VADSegmentation {
+			defaultDuration := 3000
+			vadSegmentDuration = &defaultDuration
+		}
+		endWindowSize = request.SpeechOptions.ForceSegmentAfterMS
+		if len(request.SpeechOptions.Hotwords) > 0 {
+			hotwords := make([]map[string]string, 0, len(request.SpeechOptions.Hotwords))
+			for _, hotword := range request.SpeechOptions.Hotwords {
+				hotwords = append(hotwords, map[string]string{"word": hotword})
+			}
+			contextPayload["hotwords"] = hotwords
+		}
+		if len(request.SpeechOptions.Replacements) > 0 {
+			contextPayload["correct_words"] = request.SpeechOptions.Replacements
+		}
+		if request.SpeechOptions.Context != nil && len(request.SpeechOptions.Context.Texts) > 0 {
+			contextData := make([]map[string]string, 0, len(request.SpeechOptions.Context.Texts))
+			for _, text := range request.SpeechOptions.Context.Texts {
+				contextData = append(contextData, map[string]string{"text": text})
+			}
+			contextPayload["context_type"] = "dialog_ctx"
+			contextPayload["context_data"] = contextData
+		}
+	}
+	var corpus *volcASRCorpus
+	hotwordTableID := ""
+	if config != nil {
+		hotwordTableID = strings.TrimSpace(config.ASRHotwordTableID)
+	}
+	if hotwordTableID != "" || len(contextPayload) > 0 {
+		corpus = &volcASRCorpus{BoostingTableID: hotwordTableID}
+		if len(contextPayload) > 0 {
+			contextData, marshalErr := common.Marshal(contextPayload)
+			if marshalErr != nil {
+				_ = file.Close()
+				_ = form.RemoveAll()
+				return nil, fmt.Errorf("failed to marshal ASR context: %w", marshalErr)
+			}
+			corpus.Context = string(contextData)
+		}
+	}
+
 	envelope := volcASRFlashRequest{
-		User:  volcASRUser{UID: "new-api-relay"},
-		Audio: volcASRAudio{Data: volcASRAudioDataPlaceholder, Format: request.LocalAudioFormat},
+		User: volcASRUser{UID: "new-api-relay"},
+		Audio: volcASRAudio{
+			Data:    volcASRAudioDataPlaceholder,
+			Format:  request.LocalAudioFormat,
+			Channel: channel,
+		},
 		Request: volcASRRequest{
-			ModelName:      "bigmodel",
-			EnableITN:      true,
-			EnablePunc:     true,
-			EnableDDC:      true,
-			ShowUtterances: true,
+			ModelName:            "bigmodel",
+			EnableITN:            &enableITN,
+			EnablePunc:           &enablePunc,
+			EnableDDC:            &enableDDC,
+			ShowUtterances:       &showUtterances,
+			EnableSpeakerInfo:    enableSpeakerInfo,
+			EnableChannelSplit:   enableChannelSplit,
+			SensitiveWordsFilter: sensitiveWordsFilter,
+			VADSegmentDuration:   vadSegmentDuration,
+			EndWindowSize:        endWindowSize,
+			Corpus:               corpus,
 		},
 	}
 	payload, err := common.Marshal(envelope)
@@ -175,6 +288,36 @@ func volcASRBillingUnits(durationMS int64) int {
 		return 0
 	}
 	return common.QuotaRound(float64(durationMS) / 60000 * 1000)
+}
+
+func volcASRAdditionString(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var value any
+	if err := common.Unmarshal(raw, &value); err != nil {
+		return ""
+	}
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case float64:
+		return strconv.FormatInt(int64(typed), 10)
+	default:
+		return ""
+	}
+}
+
+func volcASRAdditionChannel(raw json.RawMessage) *int {
+	value := volcASRAdditionString(raw)
+	if value == "" {
+		return nil
+	}
+	channel, err := strconv.Atoi(value)
+	if err != nil || channel < 0 {
+		return nil
+	}
+	return &channel
 }
 
 func handleVolcASRFlashResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo, responseFormat string) (any, *types.NewAPIError) {
@@ -266,12 +409,20 @@ func handleVolcASRFlashResponse(c *gin.Context, resp *http.Response, info *relay
 		}
 		if result.Result != nil {
 			for index, utterance := range result.Result.Utterances {
+				speaker := ""
+				var channel *int
+				if utterance.Additions != nil {
+					speaker = volcASRAdditionString(utterance.Additions.Speaker)
+					channel = volcASRAdditionChannel(utterance.Additions.ChannelID)
+				}
 				if wantSegments {
 					verbose.Segments = append(verbose.Segments, dto.Segment{
-						Id:    index,
-						Start: float64(utterance.StartTime) / 1000,
-						End:   float64(utterance.EndTime) / 1000,
-						Text:  utterance.Text,
+						Id:      index,
+						Start:   float64(utterance.StartTime) / 1000,
+						End:     float64(utterance.EndTime) / 1000,
+						Text:    utterance.Text,
+						Speaker: speaker,
+						Channel: channel,
 					})
 				}
 				if wantWords {
@@ -281,6 +432,8 @@ func handleVolcASRFlashResponse(c *gin.Context, resp *http.Response, info *relay
 							Start:      float64(word.StartTime) / 1000,
 							End:        float64(word.EndTime) / 1000,
 							Confidence: word.Confidence,
+							Speaker:    speaker,
+							Channel:    channel,
 						})
 					}
 				}
@@ -327,9 +480,11 @@ func handleVolcASRFlashResponse(c *gin.Context, resp *http.Response, info *relay
 	}
 	setVolcSpeechAuditContext(c, info.VolcSpeechAudit)
 	logger.LogInfo(c, fmt.Sprintf(
-		"火山语音请求完成: model=%s resource_id=%s protocol=%s log_id=%s audio_duration_ms=%d billing_units=%d timestamp_granularities=%v subtitle_formats=%v subtitle_sentence_count=%d subtitle_word_count=%d",
+		"火山语音请求完成: model=%s resource_id=%s protocol=%s log_id=%s audio_duration_ms=%d billing_units=%d timestamp_granularities=%v subtitle_formats=%v speech_options=%v context_text_count=%d hotword_count=%d replacement_count=%d subtitle_sentence_count=%d subtitle_word_count=%d",
 		info.OriginModelName, volcASRFlashResourceID, volcASRFlashProtocol, info.VolcSpeechAudit.LogID, durationMS, billingUnits,
 		info.VolcSpeechAudit.TimestampGranularities, info.VolcSpeechAudit.SubtitleFormats,
+		info.VolcSpeechAudit.SpeechOptions, info.VolcSpeechAudit.ContextTextCount,
+		info.VolcSpeechAudit.HotwordCount, info.VolcSpeechAudit.ReplacementCount,
 		info.VolcSpeechAudit.SubtitleSentenceCount, info.VolcSpeechAudit.SubtitleWordCount,
 	))
 	return &dto.Usage{PromptTokens: billingUnits, TotalTokens: billingUnits}, nil

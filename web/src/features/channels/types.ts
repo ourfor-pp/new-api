@@ -112,6 +112,7 @@ export interface ChannelOtherSettings {
 
 export interface VolcSpeechConfig {
   default_tts_speaker?: string
+  asr_hotword_table_id?: string
 }
 
 export interface AdvancedCustomConfig {

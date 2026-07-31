@@ -5216,8 +5216,11 @@
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
     "Zoom": "ズーム",
-    "Seed-TTS 2.0 default speaker ID": "Seed-TTS 2.0 default speaker ID",
-    "Enter a VolcEngine Seed-TTS 2.0 speaker ID": "Enter a VolcEngine Seed-TTS 2.0 speaker ID",
-    "Used when clients send an OpenAI standard voice such as alloy. A VolcEngine speaker ID sent by the client is passed through unchanged.": "Used when clients send an OpenAI standard voice such as alloy. A VolcEngine speaker ID sent by the client is passed through unchanged."
+    "Seed-TTS 2.0 default speaker ID": "Seed-TTS 2.0 デフォルト話者 ID",
+    "Enter a VolcEngine Seed-TTS 2.0 speaker ID": "VolcEngine Seed-TTS 2.0 話者 ID を入力してください",
+    "Used when clients send an OpenAI standard voice such as alloy. A VolcEngine speaker ID sent by the client is passed through unchanged.": "クライアントが alloy などの OpenAI 標準音声を送信した場合に使用します。クライアントが指定した VolcEngine 話者 ID は変更せずに転送されます。",
+    "ASR platform hotword table ID": "ASR プラットフォームホットワード表 ID",
+    "Enter a VolcEngine ASR hotword table ID": "VolcEngine ASR ホットワード表 ID を入力してください",
+    "Configured on the channel and never accepted from client requests.": "チャネル側でのみ設定され、クライアント要求からは受け付けません。"
   }
 }
