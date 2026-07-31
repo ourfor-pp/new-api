@@ -1675,6 +1675,24 @@
                 "schema": {
                   "$ref": "#/components/schemas/AudioTranscriptionResponse"
                 }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "response_format=text 时返回纯文本转写"
+                }
+              },
+              "application/x-subrip": {
+                "schema": {
+                  "type": "string",
+                  "description": "response_format=srt 时返回 UTF-8 SRT 字幕"
+                }
+              },
+              "text/vtt": {
+                "schema": {
+                  "type": "string",
+                  "description": "response_format=vtt 时返回 UTF-8 WebVTT 字幕"
+                }
               }
             },
             "headers": {}

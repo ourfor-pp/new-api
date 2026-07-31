@@ -66,17 +66,6 @@ func GetAndValidAudioRequest(c *gin.Context, relayMode int) (*dto.AudioRequest, 
 	if err != nil {
 		return nil, err
 	}
-	if strings.Contains(c.Request.Header.Get("Content-Type"), gin.MIMEMultipartPOSTForm) {
-		form, formErr := common.ParseMultipartFormReusable(c)
-		if formErr != nil {
-			return nil, formErr
-		}
-		audioRequest.TimestampGranularities = append(
-			audioRequest.TimestampGranularities,
-			form.Value["timestamp_granularities[]"]...,
-		)
-		_ = form.RemoveAll()
-	}
 	normalizedGranularities := make([]string, 0, len(audioRequest.TimestampGranularities))
 	seenGranularities := make(map[string]struct{}, len(audioRequest.TimestampGranularities))
 	for _, granularity := range audioRequest.TimestampGranularities {

@@ -58,7 +58,7 @@ func TestParseMultipartFormReusableStreamsBodyStorage(t *testing.T) {
 	}
 	require.NoError(t, UnmarshalBodyReusable(context, &request))
 	assert.Equal(t, "doubao-seed-asr-flash", request.Model)
-	assert.Equal(t, []string{"word"}, request.TimestampGranularities)
+	assert.Equal(t, []string{"word", "segment"}, request.TimestampGranularities)
 
 	form, err := ParseMultipartFormReusable(context)
 	require.NoError(t, err)

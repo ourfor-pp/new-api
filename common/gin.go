@@ -159,14 +159,22 @@ func UnmarshalBodyReusable(c *gin.Context, v any) error {
 		}
 		defer form.RemoveAll()
 		formMap := make(map[string]any, len(form.Value))
+		timestampGranularities := append(
+			append([]string(nil), form.Value["timestamp_granularities"]...),
+			form.Value["timestamp_granularities[]"]...,
+		)
 		for key, values := range form.Value {
 			if key == "timestamp_granularities" || key == "timestamp_granularities[]" {
-				formMap[key] = values
-			} else if len(values) == 1 {
+				continue
+			}
+			if len(values) == 1 {
 				formMap[key] = values[0]
 			} else {
 				formMap[key] = values
 			}
+		}
+		if len(timestampGranularities) > 0 {
+			formMap["timestamp_granularities"] = timestampGranularities
 		}
 		return processFormMap(formMap, v)
 	}

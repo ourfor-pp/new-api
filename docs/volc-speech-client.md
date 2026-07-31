@@ -86,6 +86,48 @@ shimmer
 
 如果客户端传入其他非空字符串，网关会把它当作火山 speaker ID 原样传递。普通客户端建议始终使用 `alloy`，避免依赖服务端具体音色 ID。
 
+#### 可指定的火山音色
+
+客户端可以把火山 `seed-tts-2.0` 音色的 `voice_type` 直接作为 `voice` 传入。网关不会维护音色白名单，也不会改写这类 speaker ID；最终是否可用取决于火山账号、应用和资源授权。
+
+以下是火山官方音色目录中的常用选择：
+
+| 场景 | 音色 | `voice` / `voice_type` | 语种 |
+| --- | --- | --- | --- |
+| 通用女声 | Vivi 2.0（推荐默认） | `zh_female_vv_uranus_bigtts` | 中文、日文、印尼语、墨西哥西班牙语；支持四川、陕西、东北方言 |
+| 通用女声 | 小何 2.0 | `zh_female_xiaohe_uranus_bigtts` | 中文 |
+| 通用女声 | 魅力苏菲 2.0 | `zh_female_sophie_uranus_bigtts` | 中文 |
+| 通用女声 | 清新女声 2.0 | `zh_female_qingxinnvsheng_uranus_bigtts` | 中文 |
+| 通用男声 | 云舟 2.0 | `zh_male_m191_uranus_bigtts` | 中文 |
+| 通用男声 | 小天 2.0 | `zh_male_taocheng_uranus_bigtts` | 中文 |
+| 通用男声 | 刘飞 2.0 | `zh_male_liufei_uranus_bigtts` | 中文 |
+| 角色扮演 | 知性灿灿 2.0 | `zh_female_cancan_uranus_bigtts` | 中文 |
+| 角色扮演 | 撒娇学妹 2.0 | `zh_female_sajiaoxuemei_uranus_bigtts` | 中文 |
+| 视频配音 | 大壹 2.0 | `zh_male_dayi_uranus_bigtts` | 中文 |
+| 视频配音 | 黑猫侦探社咪仔 2.0 | `zh_female_mizai_uranus_bigtts` | 中文 |
+| 视频配音 | 鸡汤女 2.0 | `zh_female_jitangnv_uranus_bigtts` | 中文 |
+| 视频配音 | 流畅女声 2.0 | `zh_female_liuchangnv_uranus_bigtts` | 中文 |
+| 视频配音 | 儒雅逸辰 2.0 | `zh_male_ruyayichen_uranus_bigtts` | 中文 |
+| 教育场景 | Tina 老师 2.0 | `zh_female_yingyujiaoxue_uranus_bigtts` | 中文、英式英语 |
+| 客服场景 | 暖阳女声 2.0 | `zh_female_kefunvsheng_uranus_bigtts` | 中文 |
+| 有声阅读 | 儿童绘本 2.0 | `zh_female_xiaoxue_uranus_bigtts` | 中文 |
+| 美式英语 | Tim | `en_male_tim_uranus_bigtts` | 美式英语 |
+| 美式英语 | Dacey | `en_female_dacey_uranus_bigtts` | 美式英语 |
+| 美式英语 | Stokie | `en_female_stokie_uranus_bigtts` | 美式英语 |
+
+火山会持续新增、调整音色，完整清单以[火山官方音色列表](https://www.volcengine.com/docs/6561/1257544)为准。服务端或管理工具需要结构化查询时，可使用火山官方 [`ListSpeakers`](https://api.volcengine.com/api-docs/view?action=ListSpeakers&serviceCode=speech_saas_prod&version=2025-05-20) API，并将 `ResourceIDs` 设为 `seed-tts-2.0`。官方目录中出现某个音色不代表当前火山应用必然已开通；客户端上线前应使用目标渠道做一次最小合成测试。
+
+直接指定音色的请求示例：
+
+```json
+{
+  "model": "sxh-tts",
+  "input": "你好，这是一段指定音色的语音合成测试。",
+  "voice": "zh_female_xiaohe_uranus_bigtts",
+  "response_format": "mp3"
+}
+```
+
 当前不支持：
 
 - `wav`、`aac`、`flac`
@@ -235,8 +277,10 @@ if (!response.ok || !response.body) {
 }
 
 const audioChunks: Uint8Array[] = []
+const subtitleEvents: SSEEvent[] = []
 const decoder = new TextDecoder()
 let pending = ''
+let audioDone = false
 
 const consumeEvent = (block: string) => {
   const data = block
@@ -250,17 +294,23 @@ const consumeEvent = (block: string) => {
   if (event.type === 'speech.audio.delta' && event.audio) {
     // 每个 Base64 音频块要分别解码，再按事件顺序拼接二进制。
     audioChunks.push(Uint8Array.from(Buffer.from(event.audio, 'base64')))
-  } else if (event.type === 'sxh.speech.subtitle.delta') {
-    console.log('字幕时间轴：', event)
-  } else if (event.type === 'sxh.speech.subtitle.done') {
-    console.log('最终字幕：', event.formats)
+  } else if (
+    event.type === 'sxh.speech.subtitle.delta' ||
+    event.type === 'sxh.speech.subtitle.done'
+  ) {
+    // 在 speech.audio.done 前只缓存字幕，不展示或持久化未完成结果。
+    subtitleEvents.push(event)
+  } else if (event.type === 'speech.audio.done') {
+    audioDone = true
   } else if (event.type === 'error') {
     throw new Error(`TTS 流中断：${JSON.stringify(event)}`)
   }
 }
 
 for await (const chunk of response.body) {
-  pending += decoder.decode(chunk, { stream: true }).replace(/\r\n/g, '\n')
+  pending += decoder.decode(chunk, { stream: true })
+  // 拼接后再规范化，兼容 CRLF 恰好跨越两个网络分块的情况。
+  pending = pending.replace(/\r\n/g, '\n')
   let boundary = pending.indexOf('\n\n')
   while (boundary >= 0) {
     consumeEvent(pending.slice(0, boundary))
@@ -269,7 +319,22 @@ for await (const chunk of response.body) {
   }
 }
 pending += decoder.decode()
+pending = pending.replace(/\r\n/g, '\n')
 if (pending.trim()) consumeEvent(pending)
+
+if (!audioDone) {
+  audioChunks.length = 0
+  subtitleEvents.length = 0
+  throw new Error('TTS 流在 speech.audio.done 前结束，已丢弃不完整音频和字幕')
+}
+
+for (const event of subtitleEvents) {
+  if (event.type === 'sxh.speech.subtitle.delta') {
+    console.log('字幕时间轴：', event)
+  } else {
+    console.log('最终字幕：', event.formats)
+  }
+}
 
 await writeFile(
   'speech.mp3',
