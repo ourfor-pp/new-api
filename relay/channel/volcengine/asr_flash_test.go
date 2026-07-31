@@ -526,13 +526,31 @@ func TestVolcASRFlashTextResponseAndProviderFailure(t *testing.T) {
 		StatusCode: http.StatusOK,
 		Header: http.Header{
 			"X-Api-Status-Code": []string{"55000031"},
-			"X-Api-Message":     []string{"server busy"},
+			"X-Api-Message":     []string{"server busy: private transcript text"},
+			"X-Tt-Logid":        []string{"asr-log-id"},
 		},
 		Body: ioNopCloser([]byte(`{}`)),
 	}
 	_, apiErr = handleVolcASRFlashResponse(context, failed, info, "json")
 	require.NotNil(t, apiErr)
 	assert.Equal(t, http.StatusBadGateway, apiErr.StatusCode)
+	assert.Contains(t, apiErr.Error(), "55000031")
+	assert.Contains(t, apiErr.Error(), "asr-log-id")
+	assert.NotContains(t, apiErr.Error(), "private transcript text")
+
+	malformedStatus := &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"X-Api-Status-Code": []string{"55000031 private transcript text"},
+			"X-Api-Message":     []string{"private transcript text"},
+		},
+		Body: ioNopCloser([]byte(`{}`)),
+	}
+	_, apiErr = handleVolcASRFlashResponse(context, malformedStatus, info, "json")
+	require.NotNil(t, apiErr)
+	assert.Equal(t, http.StatusBadGateway, apiErr.StatusCode)
+	assert.Contains(t, apiErr.Error(), "invalid X-Api-Status-Code")
+	assert.NotContains(t, apiErr.Error(), "private transcript text")
 }
 
 func TestVolcASRFlashMalformedSuccessResponseRemainsRetryable(t *testing.T) {

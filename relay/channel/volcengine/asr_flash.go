@@ -345,10 +345,16 @@ func handleVolcASRFlashResponse(c *gin.Context, resp *http.Response, info *relay
 	}
 	if statusCode != "20000000" && statusCode != "20000003" {
 		message := strings.TrimSpace(resp.Header.Get("X-Api-Message"))
-		code := 0
-		_, _ = fmt.Sscanf(statusCode, "%d", &code)
+		code, parseErr := strconv.Atoi(statusCode)
+		if parseErr != nil {
+			return nil, types.NewErrorWithStatusCode(
+				errors.New("volcengine ASR response has invalid X-Api-Status-Code"),
+				types.ErrorCodeBadResponse,
+				http.StatusBadGateway,
+			)
+		}
 		return nil, types.NewErrorWithStatusCode(
-			fmt.Errorf("volcengine ASR failed: code=%s message=%s", statusCode, message),
+			volcSpeechProviderError("ASR", strconv.Itoa(code), info.VolcSpeechAudit.LogID),
 			types.ErrorCodeBadResponse,
 			volcSpeechProviderStatus(code, message),
 		)

@@ -1,6 +1,7 @@
 package helper
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -144,10 +145,16 @@ func validateSpeechOptionsFields(c *gin.Context) error {
 			return err
 		}
 		raw, exists := envelope["speech_options"]
-		if !exists || string(raw) == "null" {
+		if !exists {
 			return nil
 		}
+		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return errors.New("speech_options must be a JSON object, not null")
+		}
 		speechOptionsData = raw
+	}
+	if bytes.Equal(bytes.TrimSpace(speechOptionsData), []byte("null")) {
+		return errors.New("speech_options must be a JSON object, not null")
 	}
 
 	var fields map[string]json.RawMessage
@@ -161,9 +168,12 @@ func validateSpeechOptionsFields(c *gin.Context) error {
 		"force_segment_after_ms": {}, "hotwords": {}, "replacements": {},
 		"detect": {}, "context": {},
 	}
-	for field := range fields {
+	for field, raw := range fields {
 		if _, ok := allowedFields[field]; !ok {
 			return fmt.Errorf("unknown speech_options field: %s", field)
+		}
+		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return fmt.Errorf("speech_options.%s must not be null", field)
 		}
 	}
 	providedFields := make(map[string]struct{}, len(fields))
@@ -173,32 +183,41 @@ func validateSpeechOptionsFields(c *gin.Context) error {
 	c.Set("speech_options_provided_fields", providedFields)
 
 	contextData, exists := fields["context"]
-	if !exists || string(contextData) == "null" {
+	if !exists {
 		return nil
 	}
 	var contextFields map[string]json.RawMessage
 	if err := common.Unmarshal(contextData, &contextFields); err != nil {
 		return fmt.Errorf("speech_options.context must be a JSON object: %w", err)
 	}
-	for field := range contextFields {
+	for field, raw := range contextFields {
 		if field != "texts" && field != "images" {
 			return fmt.Errorf("unknown speech_options.context field: %s", field)
+		}
+		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return fmt.Errorf("speech_options.context.%s must not be null", field)
 		}
 		providedFields["context."+field] = struct{}{}
 	}
 
 	imagesData, exists := contextFields["images"]
-	if !exists || string(imagesData) == "null" {
+	if !exists {
 		return nil
 	}
 	var images []map[string]json.RawMessage
 	if err := common.Unmarshal(imagesData, &images); err != nil {
 		return fmt.Errorf("speech_options.context.images must be an array: %w", err)
 	}
-	for _, image := range images {
-		for field := range image {
+	for index, image := range images {
+		if image == nil {
+			return fmt.Errorf("speech_options.context.images[%d] must be an object", index)
+		}
+		for field, raw := range image {
 			if field != "image_url" {
 				return fmt.Errorf("unknown speech_options.context.images field: %s", field)
+			}
+			if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+				return fmt.Errorf("speech_options.context.images[%d].%s must not be null", index, field)
 			}
 		}
 	}

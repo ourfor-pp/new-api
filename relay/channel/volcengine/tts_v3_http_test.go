@@ -464,13 +464,20 @@ func TestVolcTTSV3ProviderErrorBeforeAudioIsRetryable(t *testing.T) {
 		OriginModelName: channelconstant.ModelDoubaoSeedTTS20,
 		VolcSpeechAudit: &relaycommon.VolcSpeechAuditInfo{ResourceID: volcTTSResourceID, Protocol: volcTTSProtocol},
 	}
-	stream := buildVolcTTSJSONLine(t, volcTTSV3Result{Code: 45000030, Message: "requested resource not granted"})
-	response := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader(stream))}
+	const sensitiveMessage = "requested resource not granted: private instruction text"
+	stream := buildVolcTTSJSONLine(t, volcTTSV3Result{Code: 45000030, Message: sensitiveMessage})
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"X-Tt-Logid": []string{"tts-log-id"}},
+		Body:       io.NopCloser(bytes.NewReader(stream)),
+	}
 
 	usage, apiErr := handleVolcTTSV3Response(context, response, info, "mp3")
 	assert.Nil(t, usage)
 	require.NotNil(t, apiErr)
 	assert.Contains(t, apiErr.Error(), "45000030")
+	assert.Contains(t, apiErr.Error(), "tts-log-id")
+	assert.NotContains(t, apiErr.Error(), sensitiveMessage)
 	assert.False(t, types.IsSkipRetryError(apiErr))
 	assert.Empty(t, recorder.Body.Bytes())
 }

@@ -151,7 +151,7 @@ shimmer
 }
 ```
 
-`context.texts` 按数组顺序处理，最多 20 条；`instructions` 始终作为最后一条控制信息。火山当前只使用 `context_texts` 列表的第一项，因此网关会把上文和指令按顺序合并为一个有效上下文。未传 `sample_rate` 时保持 24k，当前可选 8k、16k、24k。
+`context.texts` 按数组顺序处理，最多 20 条且合计不超过 8000 UTF-8 字节；`instructions` 始终作为最后一条控制信息。火山当前只使用 `context_texts` 列表的第一项，因此网关会把上文和指令按顺序合并为一个有效上下文。未传 `sample_rate` 时保持 24k，当前可选 8k、16k、24k。
 
 当前不支持：
 
@@ -486,9 +486,9 @@ Authorization: Bearer <NEW_API_TOKEN>
 | `speaker_diarization` | boolean | 未传不启用 | 自动说话人分离 |
 | `channel_mode` | string | `mixed` / `separate` | `separate` 用于双声道独立识别 |
 | `force_segment_after_ms` | integer | 200–60000 | 强制判停/分段阈值，单位毫秒 |
-| `hotwords` | string[] | 最多 5000 项 | 请求级热词 |
-| `replacements` | object | 最多 5000 项 | 键为原词、值为替换词 |
-| `context.texts` | string[] | 最多 20 条 | 文本上下文 |
+| `hotwords` | string[] | 最多 5000 项、合计 20000 UTF-8 字节 | 请求级热词 |
+| `replacements` | object | 最多 5000 项、键和值合计 40000 UTF-8 字节 | 键为原词、值为替换词 |
+| `context.texts` | string[] | 最多 20 条、合计 8000 UTF-8 字节 | 文本上下文 |
 
 平台级热词表由服务端渠道配置，客户端不能传热词表 ID。未知字段、图片上下文和 `detect` 都返回 `400`，不会静默忽略。
 

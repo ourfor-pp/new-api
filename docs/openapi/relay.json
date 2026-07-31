@@ -3874,6 +3874,18 @@
       "AudioTranscriptionResponse": {
         "type": "object",
         "properties": {
+          "task": {
+            "type": "string",
+            "description": "任务类型；verbose_json 当前返回 transcribe"
+          },
+          "language": {
+            "type": "string",
+            "description": "识别语言；仅在上游提供时出现"
+          },
+          "duration": {
+            "type": "number",
+            "description": "音频时长，单位秒"
+          },
           "text": {
             "type": "string"
           },
@@ -3885,6 +3897,9 @@
                 "id": {
                   "type": "integer"
                 },
+                "seek": {
+                  "type": "integer"
+                },
                 "start": {
                   "type": "number"
                 },
@@ -3893,6 +3908,25 @@
                 },
                 "text": {
                   "type": "string"
+                },
+                "tokens": {
+                  "type": "array",
+                  "nullable": true,
+                  "items": {
+                    "type": "integer"
+                  }
+                },
+                "temperature": {
+                  "type": "number"
+                },
+                "avg_logprob": {
+                  "type": "number"
+                },
+                "compression_ratio": {
+                  "type": "number"
+                },
+                "no_speech_prob": {
+                  "type": "number"
                 },
                 "speaker": {
                   "type": "string",
@@ -4019,12 +4053,16 @@
           },
           "hotwords": {
             "type": "array",
+            "maxItems": 5000,
+            "description": "请求级热词；所有词合计最多 20000 UTF-8 字节",
             "items": {
               "type": "string"
             }
           },
           "replacements": {
             "type": "object",
+            "maxProperties": 5000,
+            "description": "替换规则；所有键和值合计最多 40000 UTF-8 字节",
             "additionalProperties": {
               "type": "string"
             }
@@ -4047,6 +4085,7 @@
               "texts": {
                 "type": "array",
                 "maxItems": 20,
+                "description": "按顺序提供的文本上下文；合计最多 8000 UTF-8 字节",
                 "items": {
                   "type": "string"
                 }

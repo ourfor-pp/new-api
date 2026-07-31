@@ -93,6 +93,51 @@ func TestMappedVolcTTSSpeechOptionsPreserveSampleRateAndRejectUnknownFields(t *t
 	require.ErrorContains(t, err, "unknown speech_options field: provider_payload")
 }
 
+func TestMappedVolcTTSRejectsExplicitNullSpeechOptions(t *testing.T) {
+	tests := []struct {
+		name          string
+		speechOptions string
+		message       string
+	}{
+		{
+			name:          "top level",
+			speechOptions: `null`,
+			message:       "speech_options must be a JSON object, not null",
+		},
+		{
+			name:          "scalar field",
+			speechOptions: `{"sample_rate":null}`,
+			message:       "speech_options.sample_rate must not be null",
+		},
+		{
+			name:          "context field",
+			speechOptions: `{"context":{"texts":null}}`,
+			message:       "speech_options.context.texts must not be null",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			context, _ := gin.CreateTestContext(httptest.NewRecorder())
+			context.Set("model_mapping", `{"customer-tts-alias":"`+constant.ModelDoubaoSeedTTS20+`"}`)
+			context.Request = httptest.NewRequest(
+				http.MethodPost,
+				"/v1/audio/speech",
+				bytes.NewBufferString(`{
+					"model":"customer-tts-alias",
+					"input":"测试",
+					"voice":"speaker",
+					"speech_options":`+test.speechOptions+`
+				}`),
+			)
+			context.Request.Header.Set("Content-Type", "application/json")
+
+			_, err := GetAndValidAudioRequest(context, relayconstant.RelayModeAudioSpeech)
+			require.ErrorContains(t, err, test.message)
+		})
+	}
+}
+
 func TestMappedVolcTTSRejectsASROnlyAndUnverifiedContextOptions(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -388,6 +433,46 @@ func TestMappedVolcASRRejectsUnknownAndUnverifiedSpeechOptionsBeforeFileParsing(
 
 			_, err := GetAndValidAudioRequest(context, relayconstant.RelayModeAudioTranscription)
 			require.ErrorContains(t, err, test.message)
+		})
+	}
+}
+
+func TestMappedVolcASRRejectsInvalidSpeechOptionsBeforeFileParsing(t *testing.T) {
+	tests := []struct {
+		name          string
+		speechOptions string
+		message       string
+	}{
+		{
+			name:          "explicit null field",
+			speechOptions: `{"punctuation":null}`,
+			message:       "speech_options.punctuation must not be null",
+		},
+		{
+			name:          "malformed JSON starting with n",
+			speechOptions: "not-json",
+			message:       "speech_options must be a JSON object",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var body bytes.Buffer
+			writer := multipart.NewWriter(&body)
+			require.NoError(t, writer.WriteField("model", "customer-asr-alias"))
+			require.NoError(t, writer.WriteField("speech_options", test.speechOptions))
+			require.NoError(t, writer.Close())
+
+			gin.SetMode(gin.TestMode)
+			context, _ := gin.CreateTestContext(httptest.NewRecorder())
+			context.Set("model_mapping", `{"customer-asr-alias":"`+constant.ModelDoubaoSeedASRFlash+`"}`)
+			context.Request = httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", bytes.NewReader(body.Bytes()))
+			context.Request.Header.Set("Content-Type", writer.FormDataContentType())
+
+			_, err := GetAndValidAudioRequest(context, relayconstant.RelayModeAudioTranscription)
+			require.ErrorContains(t, err, test.message)
+			if test.speechOptions == "not-json" {
+				assert.NotContains(t, err.Error(), "not null")
+			}
 		})
 	}
 }

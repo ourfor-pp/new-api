@@ -106,3 +106,15 @@ func setVolcSpeechAuditContext(c *gin.Context, audit *relaycommon.VolcSpeechAudi
 	}
 	c.Set("volc_speech_audit", audit.LogValue())
 }
+
+// volcSpeechProviderError keeps provider diagnostics useful without allowing an
+// upstream message to copy request text or other sensitive content into logs.
+func volcSpeechProviderError(operation, code, logID string) error {
+	operation = strings.TrimSpace(operation)
+	code = strings.TrimSpace(code)
+	logID = strings.TrimSpace(logID)
+	if logID == "" {
+		return fmt.Errorf("volcengine %s failed: code=%s", operation, code)
+	}
+	return fmt.Errorf("volcengine %s failed: code=%s log_id=%s", operation, code, logID)
+}

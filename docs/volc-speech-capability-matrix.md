@@ -19,7 +19,7 @@
 | 语速 | 支持 | 顶层 `speed`，范围 `0.5`–`2.0` |
 | 采样率 | 支持 | `speech_options.sample_rate`：8k、16k、24k；默认 24k |
 | 语音指令 | 支持 | 顶层 `instructions` |
-| 引用上文 | 支持 | `speech_options.context.texts`，最多 20 条 |
+| 引用上文 | 支持 | `speech_options.context.texts`，最多 20 条且合计不超过 8000 UTF-8 字节 |
 | 指令与上文顺序 | 支持 | 上文按客户端顺序合并，`instructions` 最后加入；火山当前只使用 `context_texts` 的第一项，因此网关发送一个合并后的有效上下文 |
 | SSE、时间轴、SRT/VTT | 支持 | 计费和完成事件语义不变 |
 | 图片上下文 | 不支持 | 当前单向 V3 API 未给出可验证字段，传入返回 `400` |
@@ -42,10 +42,10 @@
 | 强制分段 | 支持 | `force_segment_after_ms`，范围 200–60000ms |
 | 说话人分离 | 支持 | `speaker_diarization`；结果映射到 segment/word 的 `speaker` |
 | 双声道分离 | 支持 | `channel_mode=mixed|separate`；`separate` 使用 `enable_channel_split` 和双声道输入，结果映射到 segment/word 的 `channel` |
-| 请求级热词 | 支持 | `hotwords`，最多 5000 项 |
+| 请求级热词 | 支持 | `hotwords`，最多 5000 项且合计不超过 20000 UTF-8 字节 |
 | 平台级热词表 | 支持 | 渠道管理端配置 `asr_hotword_table_id`；客户端不能指定 |
-| 正则/普通替换 | 支持 | `replacements`，键为原词、值为替换词 |
-| 文本上下文 | 支持 | `context.texts`，最多 20 条 |
+| 正则/普通替换 | 支持 | `replacements`，最多 5000 项，键和值合计不超过 40000 UTF-8 字节 |
+| 文本上下文 | 支持 | `context.texts`，最多 20 条且合计不超过 8000 UTF-8 字节 |
 | 图片上下文 | 不支持 | 当前 `volc.bigasr.auc_turbo` 对探测请求成功但没有可证明的模型效果，可能是忽略未知能力，因此传入返回 `400` |
 | 音乐/POI 优化 | 不开放 | 上游接受开关，但当前资源没有返回可映射的结构化结果；`detect` 返回 `400` |
 | `annotations[]` | 协议预留 | 固定结构为 `type/start/end/label/confidence`；当前资源不会返回 |
@@ -59,4 +59,4 @@
 - TTS 仍按火山 `usage.text_words` 结算；上下文和指令不会写入日志。
 - ASR 仍按火山返回的实际音频时长结算；语音选项不改变网关计费公式。
 - 请求日志只记录选项名称、布尔状态和上下文/热词/替换词数量，不记录正文、指令、图片 URL、热词、替换词或音频。
-- 所有能力仍使用原资源 ID；若火山以后对某个能力新增独立收费，应先补计费规则和真实账单核对，再开放该能力。
+- 网关计费公式不变不代表火山侧一定没有能力附加费。`.6` 新候选进入生产前，必须用隔离请求对照火山控制台用量/账单增量，或取得明确的官方计费确认并留存结论；若任一能力存在独立收费，在补齐定价和结算规则前不得上线该能力。

@@ -433,7 +433,7 @@ func handleVolcTTSV3Response(c *gin.Context, resp *http.Response, info *relaycom
 				c,
 				info,
 				wroteAudio,
-				fmt.Errorf("volcengine TTS failed: code=%d message=%s", result.Code, result.Message),
+				volcSpeechProviderError("TTS", fmt.Sprintf("%d", result.Code), info.VolcSpeechAudit.LogID),
 				volcSpeechProviderStatus(result.Code, result.Message),
 			)
 		}
