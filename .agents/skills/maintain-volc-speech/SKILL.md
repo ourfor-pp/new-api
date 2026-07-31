@@ -57,6 +57,12 @@ git diff --check
 5. 配置指纹、清单和命令输出不得包含 Key、Token、完整用户数据或可逆敏感字段；快照不得提交、上传到制品库或长期散落在临时目录。
 6. 工作区源码联调只用于提前发现问题。正式候选验收必须对已合并提交构建的唯一标签镜像重复执行，不能用 `go run` 或未提交工作区替代候选镜像。
 
+### 上线后最小验收
+
+生产发布授权与真实请求授权由 `$operate-new-api-production` 控制。获得授权后，使用其 `scripts/validate-volc-speech-production.py` 通过公开入口执行最小 TTS→ASR，并按 `X-Oneapi-Request-Id` 核对消费日志、Token 变化和隐私字段。使用启用限额的专用测试 Token；脚本不得输出凭据，结束后删除音频。
+
+标准音色请求成功可同时证明渠道 `volc_speech.default_tts_speaker` 已生效。倍率公开接口关闭返回 403 时，不把它判为价格缺失；继续核对内部模型倍率和本次真实消费日志。
+
 ## 交付
 
 - 独立 review 与修订分开进行。
