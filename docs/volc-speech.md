@@ -26,6 +26,10 @@
 
 未配置默认音色时，使用 OpenAI 标准音色的请求会被明确拒绝。协议、资源 ID 和鉴权方式由服务端固定，客户端请求中的 `metadata` 不会覆盖这些字段。
 
+## ASR 平台热词
+
+渠道高级设置可配置 `ASR 平台热词表 ID`，对应火山自学习平台生成的 `boosting_table_id`。该 ID 只保存在渠道配置中，不接受业务客户端指定。请求级热词继续使用 `speech_options.hotwords`。
+
 ## 模型定价
 
 两个对外映射模型 `sxh-tts` 和 `sxh-asr` 都必须在模型倍率设置中显式配置价格，未配置时不得开放调用。计费按客户端请求的映射模型名匹配，不要只给底层模型名配置价格。不要在源码中写入火山易变的刊例价格，应按火山控制台当日后付费价格换算：
@@ -52,14 +56,16 @@ TTS 按火山返回的 `usage.text_words` 结算；仅在成功收到 `SessionFi
 ## 支持边界
 
 - TTS 输出：MP3、Opus、PCM；语速范围 0.5–2.0。
+- TTS 扩展：`speech_options.sample_rate` 支持 8k、16k、24k；顶层 `instructions` 与 `speech_options.context.texts` 映射为单向 V3 的 `context_texts`。
 - TTS SSE：支持标准音频 delta/done 事件；可选输出句级、字词级 JSON 时间轴和 SRT/VTT。
 - ASR 输入：WAV、MP3、OGG/Opus；最大 100MB、最长 2 小时。
-- ASR 输出：`json`、`text`、`verbose_json`、`srt`、`vtt`；Verbose JSON 可选句级和字词级时间戳。
+- ASR 扩展：ITN、标点、DDC、系统敏感词、VAD、强制分段、说话人、双声道、请求/平台热词、替换词和文本上下文。
+- ASR 输出：`json`、`text`、`verbose_json`、`srt`、`vtt`；Verbose JSON 可选句级和字词级时间戳、说话人和声道。
 - 字幕和时间轴完全保留火山返回语义，不拆分标点或数字，不做均分、质量检测、纠偏或 forced alignment。
-- 不支持实时 WebSocket ASR、异步长文件 ASR、双向 TTS、声音复刻和阿里语音。
+- 当前资源不开放 TTS/ASR 图片上下文、ASR 音乐/POI 结构化标注、实时 WebSocket ASR、异步长文件 ASR、双向 TTS、声音复刻和阿里语音。逐项依据见 `docs/volc-speech-capability-matrix.md`。
 
 TTS 字幕请求必须使用 `stream_format=sse`。服务端只在有字幕需求时向火山发送 `audio_params.enable_subtitle=true`；普通裸音频响应保持兼容。若音频成功但没有有效字幕，SSE 仍正常完成，并在 `sxh.speech.subtitle.done` 中返回 `available:false`。
 
 ASR 的 `timestamp_granularities[]=segment|word` 只允许与 `verbose_json` 组合；不传时默认只返回 segment。SRT/VTT 直接由火山 utterances 生成。
 
-语音日志额外记录 granularities、字幕格式、句数、字词数和 TTS 用量来源，不记录 Key、完整文本、音频或字幕正文。
+语音日志额外记录 granularities、字幕格式、选项名称、布尔状态、上下文/热词/替换词数量、句数、字词数和 TTS 用量来源，不记录 Key、完整文本、指令、图片 URL、热词、替换词、音频或字幕正文。

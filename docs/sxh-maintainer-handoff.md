@@ -24,6 +24,8 @@
 - 支持新版单段 APP Key 与旧版 `appid|access_token`。
 - 增加渠道默认 TTS 音色；标准 OpenAI 音色映射到默认音色，火山 speaker ID 原样传递。
 - TTS 支持 MP3、Opus、PCM；ASR 支持 WAV、MP3、OGG/Opus。
+- `.6` 增加厂商中立 `speech_options`：TTS 采样率、语音指令和文本引用上文；ASR 的 ITN、标点、DDC、敏感词、VAD、强制分段、说话人、双声道、热词、替换词和文本上下文。
+- 平台级 ASR 热词表 ID 只保存在渠道配置中，客户端不能指定。
 
 ### 2. 模型映射与定价
 
@@ -61,25 +63,25 @@
 
 ## 当前版本状态
 
-- 源码 `VERSION`：`1.0.0-rc.22-sxh.5`。
+- 源码 `VERSION`：`1.0.0-rc.22-sxh.6`。
 - `.4` 是已被后续 code review 修订取代的字幕时间轴候选，不得复用或部署。
-- `.5` 是包含 multipart、SSE 客户端和 OpenAPI 修订的新候选线，不代表已经生成镜像或部署。
-- 2026-07-31 的只读生产快照仍为 `1.0.0-rc.22-sxh.2-c20a7794`；操作前必须重新核实。
-- 2026-07-31 首次生产只读快照中的渠道 #17 未配置 `volc_speech.default_tts_speaker`；提交前维护者已确认生产默认音色完成配置，上线前仍需只读核对具体值和生效状态。
-- 当前工作区包含最近 code review 的修订：multipart 单次解析、SSE 客户端完成事件校验和完整结果缓冲、OpenAPI 文本/SRT/VTT 响应类型，以及候选版本推进。提交状态以 `git status` 为准。
+- `.5` 已部署；2026-07-31 只读核对的生产镜像为 `1.0.0-rc.22-sxh.5-03a33360`，数据库完整性检查为 `ok`。线上状态会变化，操作前仍须重新核实。
+- 生产渠道 #17 已配置默认 TTS 音色；`.6` 上线前需再次只读核对默认音色、模型映射、定价和新平台热词表配置。
+- `.6` 是当前开发候选；在全部 PR 合并、真实联调和唯一镜像构建完成前不得部署。
 
 ## 尚未完成
 
 - 主动渠道健康探测、自动摘除、恢复探测和防抖闭环尚未实现；现有 priority 不是健康管理器。
 - SQLite 到 PostgreSQL、Redis 和蓝绿部署只完成评估，未迁移。
 - 不支持实时 WebSocket ASR、异步长文件 ASR、双向或长文本 TTS、声音复刻和阿里语音。
-- `.5` 在修订合并后需要生成唯一标签的候选镜像并验证；旧 `.4` 候选镜像不得直接视为最终产物。
+- 当前资源未开放 TTS/ASR 图片上下文和 ASR 音乐/POI 结构化标注；真实探测边界见 `docs/volc-speech-capability-matrix.md`。
+- `.6` 需要从干净的最终合并提交构建唯一标签候选镜像并验证；不得复用开发中间镜像。
 
 ## 验证基线
 
 ```bash
 go test -timeout 10m ./...
-go test -race ./relay/channel/volcengine ./relay/helper -run 'Volc|Mapped'
+go test -race ./relay/channel/volcengine ./relay/helper -run 'Volc|Mapped|SpeechOptions'
 git diff --check
 ```
 
@@ -89,4 +91,4 @@ git diff --check
 
 当前单实例 SQLite 发布采用“全部预准备、监控在途请求、等待连续空窗、最后检查后快速切换”的最小停机策略。访问日志空闲不能替代长连接、流式请求和上游在途检查；没有安全 drain 时这是数秒级短暂停机优化，不是严格零停机，也不得临时让两个写实例共用同一 SQLite。
 
-2026-07-31 已使用生产一致性只读基线和一次性工作库验证当前 `.5` 工作区镜像：TTS SSE 最终事件、字幕、ASR JSON/text/SRT/VTT、混合 multipart 时间戳字段、业务模型映射、实际结算和日志隐私均通过。该结果用于工作区预验证；已合并提交构建的唯一标签镜像仍需重复相同验收。
+2026-07-31 已刷新 `.5-03a33360` 的生产一致性只读基线，并在当前账号完成 `.6` 字段探测：TTS 8k/16k/24k、两种官方音色和 `context_texts` 成功；ASR 显式开关、说话人、敏感词、VAD/强制分段、热词、替换词、文本上下文成功，双声道仅 `enable_channel_split=true` 配合 `audio.channel=2` 返回 `channel_id`。图片和音乐/POI 没有得到可验证结构化结果，因此未开放。当前工作区和 Docker 验证镜像还完成了组合能力、实际结算、选项审计持久化与正文隐私复验；最终合并提交的唯一 SHA 镜像仍需重复相同验收。
