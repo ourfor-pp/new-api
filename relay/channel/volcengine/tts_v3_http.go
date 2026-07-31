@@ -34,6 +34,7 @@ type volcTTSV3ReqParams struct {
 	Text        string               `json:"text"`
 	Speaker     string               `json:"speaker"`
 	AudioParams volcTTSV3AudioParams `json:"audio_params"`
+	Additions   string               `json:"additions,omitempty"`
 }
 
 type volcTTSV3AudioParams struct {
@@ -172,14 +173,38 @@ func buildVolcTTSV3Request(request dto.AudioRequest, config *dto.VolcSpeechConfi
 		enabled := true
 		enableSubtitle = &enabled
 	}
+	sampleRate := 24000
+	contextParts := make([]string, 0)
+	if request.SpeechOptions != nil {
+		if request.SpeechOptions.SampleRate != nil {
+			sampleRate = *request.SpeechOptions.SampleRate
+		}
+		if request.SpeechOptions.Context != nil {
+			contextParts = append(contextParts, request.SpeechOptions.Context.Texts...)
+		}
+	}
+	if instructions := strings.TrimSpace(request.Instructions); instructions != "" {
+		contextParts = append(contextParts, instructions)
+	}
+	additions := ""
+	if len(contextParts) > 0 {
+		encodedAdditions, marshalErr := common.Marshal(map[string]any{
+			"context_texts": []string{strings.Join(contextParts, "\n")},
+		})
+		if marshalErr != nil {
+			return volcTTSV3Request{}, "", fmt.Errorf("failed to marshal TTS context: %w", marshalErr)
+		}
+		additions = string(encodedAdditions)
+	}
 	return volcTTSV3Request{
 		User: volcTTSV3User{UID: "new-api-relay"},
 		ReqParams: volcTTSV3ReqParams{
-			Text:    request.Input,
-			Speaker: speaker,
+			Text:      request.Input,
+			Speaker:   speaker,
+			Additions: additions,
 			AudioParams: volcTTSV3AudioParams{
 				Format:         encoding,
-				SampleRate:     24000,
+				SampleRate:     sampleRate,
 				SpeechRate:     speechRate,
 				EnableSubtitle: enableSubtitle,
 			},

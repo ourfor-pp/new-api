@@ -167,6 +167,14 @@ func UnmarshalBodyReusable(c *gin.Context, v any) error {
 			if key == "timestamp_granularities" || key == "timestamp_granularities[]" {
 				continue
 			}
+			if key == "speech_options" && len(values) == 1 {
+				var speechOptions any
+				if err := Unmarshal([]byte(values[0]), &speechOptions); err != nil {
+					return fmt.Errorf("speech_options must be a JSON object: %w", err)
+				}
+				formMap[key] = speechOptions
+				continue
+			}
 			if len(values) == 1 {
 				formMap[key] = values[0]
 			} else {
