@@ -390,17 +390,18 @@ const response = await client.audio.speech.create({
   response_format: 'mp3',
   speed: 1.0,
   instructions: '请用平静、自然的语气说话',
-  extra_body: {
-    speech_options: {
-      sample_rate: 16000,
-      context: { texts: ['上一轮正在讨论发布计划。'] },
-    },
+  // @ts-expect-error speech_options 是网关扩展，官方 SDK 类型尚未声明
+  speech_options: {
+    sample_rate: 16000,
+    context: { texts: ['上一轮正在讨论发布计划。'] },
   },
 })
 
 const audio = Buffer.from(await response.arrayBuffer())
 await fs.writeFile('speech.mp3', audio)
 ```
+
+JavaScript/TypeScript SDK 会把未公开的顶层参数原样加入 POST 请求体，因此扩展字段直接写为 `speech_options`；不要写成 Python SDK 的 `extra_body`。
 
 ### 2.6 Python 裸音频示例
 
@@ -609,13 +610,12 @@ const result = await client.audio.transcriptions.create({
   file: fs.createReadStream('./meeting.mp3'),
   response_format: 'verbose_json',
   timestamp_granularities: ['segment', 'word'],
-  extra_body: {
-    speech_options: JSON.stringify({
-      speaker_diarization: true,
-      hotwords: ['深效科技'],
-      context: { texts: ['这是一场产品会议。'] },
-    }),
-  },
+  // @ts-expect-error speech_options 是网关扩展，官方 SDK 类型尚未声明
+  speech_options: JSON.stringify({
+    speaker_diarization: true,
+    hotwords: ['深效科技'],
+    context: { texts: ['这是一场产品会议。'] },
+  }),
 })
 
 console.log(result.text)
@@ -623,6 +623,8 @@ console.log(result.duration)
 console.log(result.segments)
 console.log(result.words)
 ```
+
+JavaScript/TypeScript SDK 的 multipart 扩展同样直接写为顶层 `speech_options`，字段值必须先 `JSON.stringify`。
 
 ### 3.5 Python 示例
 
