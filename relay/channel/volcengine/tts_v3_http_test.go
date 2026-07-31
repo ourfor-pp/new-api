@@ -267,3 +267,38 @@ func TestVolcSpeechModelRoutesDoNotChangeLegacyTTSURL(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "wss://openspeech.bytedance.com/api/v1/tts/ws_binary", legacyURL)
 }
+
+func TestVolcTTSMappedAliasUsesUpstreamModelForAdapterRouting(t *testing.T) {
+	context, _ := newVolcSpeechTestContext()
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "customer-defined-tts-alias",
+		RelayMode:       relayconstant.RelayModeAudioSpeech,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ApiKey:            "new-console-key",
+			UpstreamModelName: channelconstant.ModelDoubaoSeedTTS20,
+			ChannelOtherSettings: dto.ChannelOtherSettings{
+				VolcSpeech: &dto.VolcSpeechConfig{DefaultTTSSpeaker: "zh_female_seed_2"},
+			},
+		},
+	}
+
+	body, err := (&Adaptor{}).ConvertAudioRequest(context, info, dto.AudioRequest{
+		Model:          channelconstant.ModelDoubaoSeedTTS20,
+		Input:          "测试",
+		Voice:          "alloy",
+		ResponseFormat: "mp3",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, body)
+	require.NotNil(t, info.VolcSpeechAudit)
+	assert.Equal(t, volcTTSResourceID, info.VolcSpeechAudit.ResourceID)
+
+	requestURL, err := (&Adaptor{}).GetRequestURL(info)
+	require.NoError(t, err)
+	assert.Equal(t, volcTTSV3URL, requestURL)
+
+	headers := http.Header{}
+	require.NoError(t, (&Adaptor{}).SetupRequestHeader(context, &headers, info))
+	assert.Equal(t, "new-console-key", headers.Get("X-Api-Key"))
+	assert.Equal(t, volcTTSResourceID, headers.Get("X-Api-Resource-Id"))
+}

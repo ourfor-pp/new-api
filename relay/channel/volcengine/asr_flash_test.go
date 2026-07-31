@@ -13,6 +13,7 @@ import (
 	channelconstant "github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -52,6 +53,38 @@ func TestBuildVolcASRFlashRequestUsesValidatedFormatAndFixedModel(t *testing.T) 
 	assert.Equal(t, "bigmodel", request.Request.ModelName)
 	assert.Equal(t, base64.StdEncoding.EncodeToString([]byte("audio-data")), request.Audio.Data)
 	assert.True(t, request.Request.ShowUtterances)
+}
+
+func TestVolcASRMappedAliasUsesUpstreamModelForAdapterRouting(t *testing.T) {
+	context := newASRMultipartContext(t, "sample.opus", []byte("audio-data"))
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "customer-defined-asr-alias",
+		RelayMode:       relayconstant.RelayModeAudioTranscription,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ApiKey:            "new-console-key",
+			UpstreamModelName: channelconstant.ModelDoubaoSeedASRFlash,
+		},
+	}
+
+	body, err := (&Adaptor{}).ConvertAudioRequest(context, info, dto.AudioRequest{
+		Model:                channelconstant.ModelDoubaoSeedASRFlash,
+		ResponseFormat:       "json",
+		LocalAudioFormat:     "ogg",
+		LocalAudioDurationMS: 1000,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, body)
+	require.NotNil(t, info.VolcSpeechAudit)
+	assert.Equal(t, volcASRFlashResourceID, info.VolcSpeechAudit.ResourceID)
+
+	requestURL, err := (&Adaptor{}).GetRequestURL(info)
+	require.NoError(t, err)
+	assert.Equal(t, volcASRFlashURL, requestURL)
+
+	headers := http.Header{}
+	require.NoError(t, (&Adaptor{}).SetupRequestHeader(context, &headers, info))
+	assert.Equal(t, "new-console-key", headers.Get("X-Api-Key"))
+	assert.Equal(t, volcASRFlashResourceID, headers.Get("X-Api-Resource-Id"))
 }
 
 func TestVolcASRFlashStreamingBodyUsesExactContentLength(t *testing.T) {

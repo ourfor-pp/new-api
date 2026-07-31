@@ -13,6 +13,7 @@ import (
 	channelconstant "github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/samber/lo"
@@ -65,17 +66,31 @@ func GetAndValidAudioRequest(c *gin.Context, relayMode int) (*dto.AudioRequest, 
 	if err != nil {
 		return nil, err
 	}
+	if audioRequest.Model == "" {
+		return nil, errors.New("model is required")
+	}
+
+	validationModel, _, err := relaycommon.ResolveMappedModelName(audioRequest.Model, c.GetString("model_mapping"))
+	if err != nil {
+		return nil, err
+	}
+	originModel := audioRequest.Model
+	audioRequest.Model = validationModel
+	err = ValidateVolcSpeechAudioRequest(c, relayMode, audioRequest)
+	audioRequest.Model = originModel
+	return audioRequest, err
+}
+
+// ValidateVolcSpeechAudioRequest 按映射后的上游模型执行火山语音专用校验。
+func ValidateVolcSpeechAudioRequest(c *gin.Context, relayMode int, audioRequest *dto.AudioRequest) error {
 	switch relayMode {
 	case relayconstant.RelayModeAudioSpeech:
-		if audioRequest.Model == "" {
-			return nil, errors.New("model is required")
-		}
 		if audioRequest.Model == channelconstant.ModelDoubaoSeedTTS20 {
 			if strings.TrimSpace(audioRequest.Input) == "" {
-				return nil, errors.New("input is required")
+				return errors.New("input is required")
 			}
 			if strings.TrimSpace(audioRequest.Voice) == "" {
-				return nil, errors.New("voice is required")
+				return errors.New("voice is required")
 			}
 			if audioRequest.ResponseFormat == "" {
 				audioRequest.ResponseFormat = "mp3"
@@ -83,16 +98,13 @@ func GetAndValidAudioRequest(c *gin.Context, relayMode int) (*dto.AudioRequest, 
 			switch strings.ToLower(audioRequest.ResponseFormat) {
 			case "mp3", "opus", "pcm":
 			default:
-				return nil, fmt.Errorf("doubao-seed-tts-2.0 only supports mp3, opus, or pcm response_format")
+				return fmt.Errorf("doubao-seed-tts-2.0 only supports mp3, opus, or pcm response_format")
 			}
 			if audioRequest.Speed != nil && (*audioRequest.Speed < 0.5 || *audioRequest.Speed > 2.0) {
-				return nil, errors.New("speed must be between 0.5 and 2.0")
+				return errors.New("speed must be between 0.5 and 2.0")
 			}
 		}
 	default:
-		if audioRequest.Model == "" {
-			return nil, errors.New("model is required")
-		}
 		if audioRequest.ResponseFormat == "" {
 			audioRequest.ResponseFormat = "json"
 		}
@@ -100,44 +112,48 @@ func GetAndValidAudioRequest(c *gin.Context, relayMode int) (*dto.AudioRequest, 
 			switch strings.ToLower(audioRequest.ResponseFormat) {
 			case "json", "text", "verbose_json":
 			case "srt", "vtt":
-				return nil, fmt.Errorf("doubao-seed-asr-flash does not support %s response_format", audioRequest.ResponseFormat)
+				return fmt.Errorf("doubao-seed-asr-flash does not support %s response_format", audioRequest.ResponseFormat)
 			default:
-				return nil, fmt.Errorf("unsupported response_format for doubao-seed-asr-flash: %s", audioRequest.ResponseFormat)
+				return fmt.Errorf("unsupported response_format for doubao-seed-asr-flash: %s", audioRequest.ResponseFormat)
+			}
+
+			if audioRequest.LocalAudioFormat != "" && audioRequest.LocalAudioDurationMS > 0 {
+				return nil
 			}
 
 			form, formErr := common.ParseMultipartFormReusable(c)
 			if formErr != nil {
-				return nil, fmt.Errorf("failed to parse audio form: %w", formErr)
+				return fmt.Errorf("failed to parse audio form: %w", formErr)
 			}
 			defer form.RemoveAll()
 			files := form.File["file"]
 			if len(files) == 0 {
-				return nil, errors.New("file is required")
+				return errors.New("file is required")
 			}
 			fileHeader := files[0]
 			ext := strings.ToLower(filepath.Ext(fileHeader.Filename))
 			audioFormat, validationErr := validateDoubaoASRFile(fileHeader.Filename, fileHeader.Size, 1)
 			if validationErr != nil {
-				return nil, validationErr
+				return validationErr
 			}
 			file, openErr := fileHeader.Open()
 			if openErr != nil {
-				return nil, fmt.Errorf("failed to open audio file: %w", openErr)
+				return fmt.Errorf("failed to open audio file: %w", openErr)
 			}
 			duration, durationErr := common.GetAudioDuration(c.Request.Context(), file, ext)
 			_ = file.Close()
 			if durationErr != nil {
-				return nil, fmt.Errorf("failed to get audio duration: %w", durationErr)
+				return fmt.Errorf("failed to get audio duration: %w", durationErr)
 			}
 			_, validationErr = validateDoubaoASRFile(fileHeader.Filename, fileHeader.Size, duration)
 			if validationErr != nil {
-				return nil, validationErr
+				return validationErr
 			}
 			audioRequest.LocalAudioFormat = audioFormat
 			audioRequest.LocalAudioDurationMS = int64(math.Round(duration * 1000))
 		}
 	}
-	return audioRequest, nil
+	return nil
 }
 
 func validateDoubaoASRFile(filename string, size int64, duration float64) (string, error) {

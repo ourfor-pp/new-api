@@ -33,6 +33,9 @@ func AudioHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
+	if err = helper.ValidateVolcSpeechAudioRequest(c, info.RelayMode, request); err != nil {
+		return newAudioConvertError(err)
+	}
 
 	adaptor := GetAdaptor(info.ApiType)
 	if adaptor == nil {
@@ -70,7 +73,7 @@ func AudioHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 			newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)
 			// reset status code 重置状态码
 			service.ResetStatusCode(newAPIError, statusCodeMappingStr)
-			return markVolcSpeechGatewayTimeoutRetry(info.OriginModelName, httpResp.StatusCode, newAPIError)
+			return markVolcSpeechGatewayTimeoutRetry(info.EffectiveUpstreamModelName(), httpResp.StatusCode, newAPIError)
 		}
 	}
 

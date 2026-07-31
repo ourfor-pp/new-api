@@ -48,7 +48,8 @@ func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayIn
 }
 
 func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.AudioRequest) (io.Reader, error) {
-	if info.OriginModelName == channelconstant.ModelDoubaoSeedTTS20 {
+	upstreamModelName := info.EffectiveUpstreamModelName()
+	if upstreamModelName == channelconstant.ModelDoubaoSeedTTS20 {
 		if _, _, _, err := parseVolcSpeechCredential(info.ApiKey); err != nil {
 			return nil, types.NewError(err, types.ErrorCodeChannelInvalidKey)
 		}
@@ -69,7 +70,7 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 		return bytes.NewReader(jsonData), nil
 	}
 
-	if info.OriginModelName == channelconstant.ModelDoubaoSeedASRFlash {
+	if upstreamModelName == channelconstant.ModelDoubaoSeedASRFlash {
 		if _, _, _, err := parseVolcSpeechCredential(info.ApiKey); err != nil {
 			return nil, types.NewError(err, types.ErrorCodeChannelInvalidKey)
 		}
@@ -123,7 +124,7 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 			ReqID:     generateRequestID(),
 			Text:      request.Input,
 			Operation: "submit",
-			Model:     info.OriginModelName,
+			Model:     upstreamModelName,
 		},
 	}
 
@@ -279,10 +280,11 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 }
 
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
-	if info.OriginModelName == channelconstant.ModelDoubaoSeedTTS20 {
+	upstreamModelName := info.EffectiveUpstreamModelName()
+	if upstreamModelName == channelconstant.ModelDoubaoSeedTTS20 {
 		return volcTTSV3URL, nil
 	}
-	if info.OriginModelName == channelconstant.ModelDoubaoSeedASRFlash {
+	if upstreamModelName == channelconstant.ModelDoubaoSeedASRFlash {
 		return volcASRFlashURL, nil
 	}
 
@@ -336,7 +338,8 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {
 	channel.SetupApiRequestHeader(info, c, req)
 
-	if info.OriginModelName == channelconstant.ModelDoubaoSeedTTS20 {
+	upstreamModelName := info.EffectiveUpstreamModelName()
+	if upstreamModelName == channelconstant.ModelDoubaoSeedTTS20 {
 		headers, err := buildVolcSpeechHeaders(info.ApiKey, volcTTSResourceID, "X-Api-App-Id")
 		if err != nil {
 			return err
@@ -348,7 +351,7 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *rel
 		req.Set("Content-Type", gin.MIMEJSON)
 		return nil
 	}
-	if info.OriginModelName == channelconstant.ModelDoubaoSeedASRFlash {
+	if upstreamModelName == channelconstant.ModelDoubaoSeedASRFlash {
 		headers, err := buildVolcSpeechHeaders(info.ApiKey, volcASRFlashResourceID, "X-Api-App-Key")
 		if err != nil {
 			return err
@@ -404,8 +407,9 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
-	if info.OriginModelName == channelconstant.ModelDoubaoSeedTTS20 ||
-		info.OriginModelName == channelconstant.ModelDoubaoSeedASRFlash {
+	upstreamModelName := info.EffectiveUpstreamModelName()
+	if upstreamModelName == channelconstant.ModelDoubaoSeedTTS20 ||
+		upstreamModelName == channelconstant.ModelDoubaoSeedASRFlash {
 		return doVolcSpeechRequest(a, c, info, requestBody)
 	}
 
@@ -425,10 +429,11 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 }
 
 func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
-	if info.OriginModelName == channelconstant.ModelDoubaoSeedTTS20 {
+	upstreamModelName := info.EffectiveUpstreamModelName()
+	if upstreamModelName == channelconstant.ModelDoubaoSeedTTS20 {
 		return handleVolcTTSV3Response(c, resp, info, c.GetString(contextKeyResponseFormat))
 	}
-	if info.OriginModelName == channelconstant.ModelDoubaoSeedASRFlash {
+	if upstreamModelName == channelconstant.ModelDoubaoSeedASRFlash {
 		return handleVolcASRFlashResponse(c, resp, info, c.GetString(contextKeyResponseFormat))
 	}
 

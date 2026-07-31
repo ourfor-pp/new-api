@@ -206,6 +206,18 @@ type VolcSpeechAuditInfo struct {
 	PartialFailure  bool
 }
 
+// EffectiveUpstreamModelName 返回适配器实际应识别的模型。
+// 映射尚未初始化时回退到业务模型，避免调用方各自实现不同的回退逻辑。
+func (info *RelayInfo) EffectiveUpstreamModelName() string {
+	if info == nil {
+		return ""
+	}
+	if info.ChannelMeta != nil && info.UpstreamModelName != "" {
+		return info.UpstreamModelName
+	}
+	return info.OriginModelName
+}
+
 func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	channelType := common.GetContextKeyInt(c, constant.ContextKeyChannelType)
 	paramOverride := common.GetContextKeyStringMap(c, constant.ContextKeyChannelParamOverride)

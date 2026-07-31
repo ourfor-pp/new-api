@@ -38,3 +38,33 @@ func TestEstimateRequestTokenUsesUnicodeCharactersForVolcTTS(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 3, tokens)
 }
+
+func TestEstimateRequestTokenUsesMappedVolcSpeechModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	t.Run("TTS 任意别名按字符预扣", func(t *testing.T) {
+		context, _ := gin.CreateTestContext(httptest.NewRecorder())
+		context.Set("model_mapping", `{"customer-tts-alias":"`+constant.ModelDoubaoSeedTTS20+`"}`)
+		info := &relaycommon.RelayInfo{
+			OriginModelName: "customer-tts-alias",
+			Request:         &dto.AudioRequest{Input: "你好A"},
+		}
+
+		tokens, err := EstimateRequestToken(context, &types.TokenCountMeta{}, info)
+		require.NoError(t, err)
+		assert.Equal(t, 3, tokens)
+	})
+
+	t.Run("ASR 任意别名按时长预扣", func(t *testing.T) {
+		context, _ := gin.CreateTestContext(httptest.NewRecorder())
+		context.Set("model_mapping", `{"customer-asr-alias":"`+constant.ModelDoubaoSeedASRFlash+`"}`)
+		info := &relaycommon.RelayInfo{
+			OriginModelName: "customer-asr-alias",
+			Request:         &dto.AudioRequest{LocalAudioDurationMS: 2499},
+		}
+
+		tokens, err := EstimateRequestToken(context, &types.TokenCountMeta{}, info)
+		require.NoError(t, err)
+		assert.Equal(t, 42, tokens)
+	})
+}
