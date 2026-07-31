@@ -233,6 +233,7 @@ export const channelFormSchema = z
     aws_key_type: z.enum(['ak_sk', 'api_key']).optional(), // AWS specific
     azure_responses_version: z.string().optional(), // Azure specific
     volc_speech_default_tts_speaker: z.string().optional(), // VolcEngine Seed-TTS 2.0
+    volc_speech_asr_hotword_table_id: z.string().optional(), // VolcEngine ASR platform hotword table
     // Field passthrough controls (stored in settings JSON)
     allow_service_tier: z.boolean().optional(), // OpenAI/Anthropic
     disable_store: z.boolean().optional(), // OpenAI only
@@ -384,6 +385,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   aws_key_type: 'ak_sk',
   azure_responses_version: '',
   volc_speech_default_tts_speaker: '',
+  volc_speech_asr_hotword_table_id: '',
   // Field passthrough controls
   allow_service_tier: false,
   disable_store: false,
@@ -454,6 +456,7 @@ export function transformChannelToFormDefaults(
   let upstreamModelUpdateIgnoredModels = ''
   let advancedCustom = ''
   let volcSpeechDefaultTTSSpeaker = ''
+  let volcSpeechASRHotwordTableID = ''
 
   if (channel.settings) {
     try {
@@ -484,6 +487,8 @@ export function transformChannelToFormDefaults(
       }
       volcSpeechDefaultTTSSpeaker =
         parsed.volc_speech?.default_tts_speaker || ''
+      volcSpeechASRHotwordTableID =
+        parsed.volc_speech?.asr_hotword_table_id || ''
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error('Failed to parse channel settings:', error)
@@ -536,6 +541,7 @@ export function transformChannelToFormDefaults(
     upstream_model_update_ignored_models: upstreamModelUpdateIgnoredModels,
     advanced_custom: advancedCustom,
     volc_speech_default_tts_speaker: volcSpeechDefaultTTSSpeaker,
+    volc_speech_asr_hotword_table_id: volcSpeechASRHotwordTableID,
   }
 }
 
@@ -600,10 +606,14 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
 
   if (
     formData.type === 45 &&
-    formData.volc_speech_default_tts_speaker?.trim()
+    (formData.volc_speech_default_tts_speaker?.trim() ||
+      formData.volc_speech_asr_hotword_table_id?.trim())
   ) {
     settingsObj.volc_speech = {
-      default_tts_speaker: formData.volc_speech_default_tts_speaker.trim(),
+      default_tts_speaker:
+        formData.volc_speech_default_tts_speaker?.trim() || undefined,
+      asr_hotword_table_id:
+        formData.volc_speech_asr_hotword_table_id?.trim() || undefined,
     }
   } else if ('volc_speech' in settingsObj) {
     delete settingsObj.volc_speech

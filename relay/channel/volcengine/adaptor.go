@@ -58,11 +58,27 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 			return nil, err
 		}
 		c.Set(contextKeyResponseFormat, encoding)
+		speechOptions := make([]string, 0)
+		contextTextCount := 0
+		if request.SpeechOptions != nil {
+			if request.SpeechOptions.SampleRate != nil {
+				speechOptions = append(speechOptions, "sample_rate")
+			}
+			if request.SpeechOptions.Context != nil && len(request.SpeechOptions.Context.Texts) > 0 {
+				speechOptions = append(speechOptions, "context.texts")
+				contextTextCount = len(request.SpeechOptions.Context.Texts)
+			}
+		}
+		if strings.TrimSpace(request.Instructions) != "" {
+			speechOptions = append(speechOptions, "instructions")
+		}
 		info.VolcSpeechAudit = &relaycommon.VolcSpeechAuditInfo{
 			ResourceID:             volcTTSResourceID,
 			Protocol:               volcTTSProtocol,
 			TimestampGranularities: append([]string(nil), request.TimestampGranularities...),
 			SubtitleFormats:        append([]string(nil), request.SubtitleFormats...),
+			SpeechOptions:          speechOptions,
+			ContextTextCount:       contextTextCount,
 		}
 		setVolcSpeechAuditContext(c, info.VolcSpeechAudit)
 		jsonData, err := common.Marshal(volcRequest)
@@ -79,15 +95,65 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 		if info.RelayMode != constant.RelayModeAudioTranscription {
 			return nil, errors.New("doubao-seed-asr-flash only supports audio transcriptions")
 		}
-		requestBody, err := buildVolcASRFlashRequestBody(c, request)
+		requestBody, err := buildVolcASRFlashRequestBody(c, request, info.ChannelOtherSettings.VolcSpeech)
 		if err != nil {
 			return nil, err
 		}
 		c.Set(contextKeyResponseFormat, request.ResponseFormat)
+		speechOptions := make([]string, 0)
+		contextTextCount := 0
+		hotwordCount := 0
+		replacementCount := 0
+		if request.SpeechOptions != nil {
+			if request.SpeechOptions.TextNormalization != nil {
+				speechOptions = append(speechOptions, fmt.Sprintf("text_normalization=%t", *request.SpeechOptions.TextNormalization))
+			}
+			if request.SpeechOptions.Punctuation != nil {
+				speechOptions = append(speechOptions, fmt.Sprintf("punctuation=%t", *request.SpeechOptions.Punctuation))
+			}
+			if request.SpeechOptions.SemanticSmoothing != nil {
+				speechOptions = append(speechOptions, fmt.Sprintf("semantic_smoothing=%t", *request.SpeechOptions.SemanticSmoothing))
+			}
+			if request.SpeechOptions.SensitiveWordFilter != nil {
+				speechOptions = append(speechOptions, fmt.Sprintf("sensitive_word_filter=%t", *request.SpeechOptions.SensitiveWordFilter))
+			}
+			if request.SpeechOptions.VADSegmentation != nil {
+				speechOptions = append(speechOptions, fmt.Sprintf("vad_segmentation=%t", *request.SpeechOptions.VADSegmentation))
+			}
+			if request.SpeechOptions.SpeakerDiarization != nil {
+				speechOptions = append(speechOptions, fmt.Sprintf("speaker_diarization=%t", *request.SpeechOptions.SpeakerDiarization))
+			}
+			if request.SpeechOptions.ChannelMode != "" {
+				speechOptions = append(speechOptions, "channel_mode="+request.SpeechOptions.ChannelMode)
+			}
+			if request.SpeechOptions.ForceSegmentAfterMS != nil {
+				speechOptions = append(speechOptions, "force_segment_after_ms")
+			}
+			if len(request.SpeechOptions.Hotwords) > 0 {
+				speechOptions = append(speechOptions, "hotwords")
+				hotwordCount = len(request.SpeechOptions.Hotwords)
+			}
+			if len(request.SpeechOptions.Replacements) > 0 {
+				speechOptions = append(speechOptions, "replacements")
+				replacementCount = len(request.SpeechOptions.Replacements)
+			}
+			if request.SpeechOptions.Context != nil && len(request.SpeechOptions.Context.Texts) > 0 {
+				speechOptions = append(speechOptions, "context.texts")
+				contextTextCount = len(request.SpeechOptions.Context.Texts)
+			}
+		}
+		if info.ChannelOtherSettings.VolcSpeech != nil &&
+			strings.TrimSpace(info.ChannelOtherSettings.VolcSpeech.ASRHotwordTableID) != "" {
+			speechOptions = append(speechOptions, "platform_hotword_table=true")
+		}
 		info.VolcSpeechAudit = &relaycommon.VolcSpeechAuditInfo{
 			ResourceID:             volcASRFlashResourceID,
 			Protocol:               volcASRFlashProtocol,
 			TimestampGranularities: append([]string(nil), request.TimestampGranularities...),
+			SpeechOptions:          speechOptions,
+			ContextTextCount:       contextTextCount,
+			HotwordCount:           hotwordCount,
+			ReplacementCount:       replacementCount,
 		}
 		switch strings.ToLower(request.ResponseFormat) {
 		case "srt", "vtt":

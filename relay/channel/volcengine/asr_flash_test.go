@@ -40,7 +40,7 @@ func newASRMultipartContext(t *testing.T, filename string, audio []byte) *gin.Co
 
 func TestBuildVolcASRFlashRequestUsesValidatedFormatAndFixedModel(t *testing.T) {
 	context := newASRMultipartContext(t, "sample.opus", []byte("audio-data"))
-	requestBody, err := buildVolcASRFlashRequestBody(context, dto.AudioRequest{LocalAudioFormat: "ogg"})
+	requestBody, err := buildVolcASRFlashRequestBody(context, dto.AudioRequest{LocalAudioFormat: "ogg"}, nil)
 	require.NoError(t, err)
 	payload, err := io.ReadAll(requestBody)
 	require.NoError(t, err)
@@ -52,7 +52,73 @@ func TestBuildVolcASRFlashRequestUsesValidatedFormatAndFixedModel(t *testing.T) 
 	assert.Equal(t, "ogg", request.Audio.Format)
 	assert.Equal(t, "bigmodel", request.Request.ModelName)
 	assert.Equal(t, base64.StdEncoding.EncodeToString([]byte("audio-data")), request.Audio.Data)
-	assert.True(t, request.Request.ShowUtterances)
+	require.NotNil(t, request.Request.ShowUtterances)
+	assert.True(t, *request.Request.ShowUtterances)
+}
+
+func TestBuildVolcASRFlashRequestMapsSpeechOptionsAndChannelHotwordConfig(t *testing.T) {
+	disabled := false
+	enabled := true
+	forceSegmentAfterMS := 800
+	context := newASRMultipartContext(t, "sample.mp3", []byte("audio-data"))
+	requestBody, err := buildVolcASRFlashRequestBody(context, dto.AudioRequest{
+		LocalAudioFormat: "mp3",
+		SpeechOptions: &dto.SpeechOptions{
+			TextNormalization:   &disabled,
+			Punctuation:         &disabled,
+			SemanticSmoothing:   &disabled,
+			SensitiveWordFilter: &disabled,
+			VADSegmentation:     &enabled,
+			SpeakerDiarization:  &enabled,
+			ChannelMode:         "separate",
+			ForceSegmentAfterMS: &forceSegmentAfterMS,
+			Hotwords:            []string{"专有名词"},
+			Replacements:        map[string]string{"旧词": "新词"},
+			Context:             &dto.SpeechOptionsContext{Texts: []string{"业务背景"}},
+		},
+	}, &dto.VolcSpeechConfig{ASRHotwordTableID: "platform-table-id"})
+	require.NoError(t, err)
+	payload, err := io.ReadAll(requestBody)
+	require.NoError(t, err)
+	require.NoError(t, requestBody.Close())
+
+	var request volcASRFlashRequest
+	require.NoError(t, common.Unmarshal(payload, &request))
+	require.NotNil(t, request.Request.EnableITN)
+	assert.False(t, *request.Request.EnableITN)
+	require.NotNil(t, request.Request.EnablePunc)
+	assert.False(t, *request.Request.EnablePunc)
+	require.NotNil(t, request.Request.EnableDDC)
+	assert.False(t, *request.Request.EnableDDC)
+	require.NotNil(t, request.Request.EnableSpeakerInfo)
+	assert.True(t, *request.Request.EnableSpeakerInfo)
+	require.NotNil(t, request.Request.EnableChannelSplit)
+	assert.True(t, *request.Request.EnableChannelSplit)
+	require.NotNil(t, request.Audio.Channel)
+	assert.Equal(t, 2, *request.Audio.Channel)
+	assert.Equal(t, 800, *request.Request.EndWindowSize)
+	assert.Equal(t, 3000, *request.Request.VADSegmentDuration)
+	assert.JSONEq(t, `{"system_reserved_filter":false}`, request.Request.SensitiveWordsFilter)
+	require.NotNil(t, request.Request.Corpus)
+	assert.Equal(t, "platform-table-id", request.Request.Corpus.BoostingTableID)
+
+	var contextPayload struct {
+		Hotwords     []map[string]string `json:"hotwords"`
+		CorrectWords map[string]string   `json:"correct_words"`
+		ContextType  string              `json:"context_type"`
+		ContextData  []map[string]string `json:"context_data"`
+	}
+	require.NoError(t, common.Unmarshal([]byte(request.Request.Corpus.Context), &contextPayload))
+	assert.Equal(t, []map[string]string{{"word": "专有名词"}}, contextPayload.Hotwords)
+	assert.Equal(t, map[string]string{"旧词": "新词"}, contextPayload.CorrectWords)
+	assert.Equal(t, "dialog_ctx", contextPayload.ContextType)
+	assert.Equal(t, []map[string]string{{"text": "业务背景"}}, contextPayload.ContextData)
+}
+
+func TestVolcASRAdditionChannelPreservesZero(t *testing.T) {
+	channel := volcASRAdditionChannel([]byte(`0`))
+	require.NotNil(t, channel)
+	assert.Equal(t, 0, *channel)
 }
 
 func TestVolcASRMappedAliasUsesUpstreamModelForAdapterRouting(t *testing.T) {
@@ -89,7 +155,7 @@ func TestVolcASRMappedAliasUsesUpstreamModelForAdapterRouting(t *testing.T) {
 
 func TestVolcASRFlashStreamingBodyUsesExactContentLength(t *testing.T) {
 	context := newASRMultipartContext(t, "sample.wav", []byte("audio-data"))
-	requestBody, err := buildVolcASRFlashRequestBody(context, dto.AudioRequest{LocalAudioFormat: "wav"})
+	requestBody, err := buildVolcASRFlashRequestBody(context, dto.AudioRequest{LocalAudioFormat: "wav"}, nil)
 	require.NoError(t, err)
 
 	var receivedPayload []byte
@@ -133,6 +199,10 @@ func TestVolcASRFlashResponseUsesActualDurationAndVerboseSegments(t *testing.T) 
 					StartTime: 450,
 					EndTime:   1530,
 					Text:      "关闭透传。",
+					Additions: &volcASRResultAdditions{
+						Speaker:   []byte(`"speaker-1"`),
+						ChannelID: []byte(`2`),
+					},
 					Words: []volcASRWord{
 						{StartTime: 450, EndTime: 770, Text: "关", Confidence: &confidence},
 					},
@@ -184,6 +254,10 @@ func TestVolcASRFlashVerboseJSONReturnsRequestedWordAndSegmentTimestamps(t *test
 					StartTime: 450,
 					EndTime:   1530,
 					Text:      "关闭透传。",
+					Additions: &volcASRResultAdditions{
+						Speaker:   []byte(`"speaker-1"`),
+						ChannelID: []byte(`2`),
+					},
 					Words: []volcASRWord{
 						{StartTime: 450, EndTime: 770, Text: "关", Confidence: &confidence},
 						{StartTime: 770, EndTime: 970, Text: "闭"},
@@ -223,12 +297,19 @@ func TestVolcASRFlashVerboseJSONReturnsRequestedWordAndSegmentTimestamps(t *test
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &verbose))
 	require.Len(t, verbose.Segments, 1)
 	require.Len(t, verbose.Words, 2)
+	assert.Equal(t, "speaker-1", verbose.Segments[0].Speaker)
+	require.NotNil(t, verbose.Segments[0].Channel)
+	assert.Equal(t, 2, *verbose.Segments[0].Channel)
 	assert.Equal(t, "关", verbose.Words[0].Word)
 	assert.InDelta(t, 0.45, verbose.Words[0].Start, 0.0001)
 	assert.InDelta(t, 0.77, verbose.Words[0].End, 0.0001)
 	require.NotNil(t, verbose.Words[0].Confidence)
 	assert.InDelta(t, confidence, *verbose.Words[0].Confidence, 0.0001)
+	assert.Equal(t, "speaker-1", verbose.Words[0].Speaker)
+	require.NotNil(t, verbose.Words[0].Channel)
+	assert.Equal(t, 2, *verbose.Words[0].Channel)
 	assert.Nil(t, verbose.Words[1].Confidence)
+	assert.Equal(t, "speaker-1", verbose.Words[1].Speaker)
 	assert.Equal(t, 1, info.VolcSpeechAudit.SubtitleSentenceCount)
 	assert.Equal(t, 2, info.VolcSpeechAudit.SubtitleWordCount)
 }

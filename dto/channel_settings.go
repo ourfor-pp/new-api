@@ -58,6 +58,7 @@ type ChannelOtherSettings struct {
 
 type VolcSpeechConfig struct {
 	DefaultTTSSpeaker string `json:"default_tts_speaker,omitempty"`
+	ASRHotwordTableID string `json:"asr_hotword_table_id,omitempty"`
 }
 
 func (s *ChannelOtherSettings) IsOpenRouterEnterprise() bool {

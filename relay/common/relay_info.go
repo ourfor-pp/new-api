@@ -209,6 +209,53 @@ type VolcSpeechAuditInfo struct {
 	SubtitleSentenceCount  int
 	SubtitleWordCount      int
 	UsageSource            string
+	SpeechOptions          []string
+	ContextTextCount       int
+	HotwordCount           int
+	ReplacementCount       int
+}
+
+// LogValue returns the privacy-safe Volc speech audit payload shared by
+// request context, consume logs, and backend diagnostics.
+func (a *VolcSpeechAuditInfo) LogValue() map[string]interface{} {
+	if a == nil {
+		return nil
+	}
+	value := map[string]interface{}{
+		"resource_id":             a.ResourceID,
+		"protocol":                a.Protocol,
+		"billing_units":           a.BillingUnits,
+		"context_text_count":      a.ContextTextCount,
+		"hotword_count":           a.HotwordCount,
+		"replacement_count":       a.ReplacementCount,
+		"subtitle_sentence_count": a.SubtitleSentenceCount,
+		"subtitle_word_count":     a.SubtitleWordCount,
+	}
+	if a.LogID != "" {
+		value["log_id"] = a.LogID
+	}
+	if a.TextWords > 0 {
+		value["text_words"] = a.TextWords
+	}
+	if a.AudioDurationMS > 0 {
+		value["audio_duration_ms"] = a.AudioDurationMS
+	}
+	if a.PartialFailure {
+		value["partial_failure"] = true
+	}
+	if len(a.TimestampGranularities) > 0 {
+		value["timestamp_granularities"] = a.TimestampGranularities
+	}
+	if len(a.SubtitleFormats) > 0 {
+		value["subtitle_formats"] = a.SubtitleFormats
+	}
+	if len(a.SpeechOptions) > 0 {
+		value["speech_options"] = a.SpeechOptions
+	}
+	if a.UsageSource != "" {
+		value["usage_source"] = a.UsageSource
+	}
+	return value
 }
 
 // EffectiveUpstreamModelName 返回适配器实际应识别的模型。

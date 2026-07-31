@@ -223,6 +223,8 @@ func ValidateVolcSpeechAudioRequest(c *gin.Context, relayMode int, audioRequest 
 	if audioRequest.SpeechOptions != nil {
 		supported := relayMode == relayconstant.RelayModeAudioSpeech &&
 			audioRequest.Model == channelconstant.ModelDoubaoSeedTTS20
+		supported = supported || relayMode == relayconstant.RelayModeAudioTranscription &&
+			audioRequest.Model == channelconstant.ModelDoubaoSeedASRFlash
 		if !supported {
 			return fmt.Errorf("speech_options is not supported for model %s in this audio operation", audioRequest.Model)
 		}
@@ -321,6 +323,78 @@ func ValidateVolcSpeechAudioRequest(c *gin.Context, relayMode int, audioRequest 
 			audioRequest.ResponseFormat = "json"
 		}
 		if audioRequest.Model == channelconstant.ModelDoubaoSeedASRFlash {
+			if audioRequest.SpeechOptions != nil {
+				if speechOptionFieldProvided(c, "sample_rate") {
+					return errors.New("speech_options.sample_rate is not supported for doubao-seed-asr-flash")
+				}
+				if speechOptionFieldProvided(c, "context.images") {
+					return errors.New("speech_options.context.images is not verified for the current volc.bigasr.auc_turbo resource")
+				}
+				if speechOptionFieldProvided(c, "detect") {
+					return errors.New("speech_options.detect is not exposed because the current resource returned no structured music or POI annotations")
+				}
+				audioRequest.SpeechOptions.ChannelMode = strings.ToLower(strings.TrimSpace(audioRequest.SpeechOptions.ChannelMode))
+				if speechOptionFieldProvided(c, "channel_mode") {
+					switch audioRequest.SpeechOptions.ChannelMode {
+					case "mixed", "separate":
+					default:
+						return errors.New("speech_options.channel_mode must be mixed or separate")
+					}
+				}
+				if audioRequest.SpeechOptions.ForceSegmentAfterMS != nil &&
+					(*audioRequest.SpeechOptions.ForceSegmentAfterMS < 200 ||
+						*audioRequest.SpeechOptions.ForceSegmentAfterMS > 60000) {
+					return errors.New("speech_options.force_segment_after_ms must be between 200 and 60000")
+				}
+				if audioRequest.SpeechOptions.VADSegmentation != nil && !*audioRequest.SpeechOptions.VADSegmentation {
+					return errors.New("the current ASR resource cannot disable VAD segmentation explicitly")
+				}
+				if len(audioRequest.SpeechOptions.Hotwords) > 5000 {
+					return errors.New("speech_options.hotwords must contain at most 5000 entries")
+				}
+				hotwordBytes := 0
+				for index, hotword := range audioRequest.SpeechOptions.Hotwords {
+					hotword = strings.TrimSpace(hotword)
+					if hotword == "" {
+						return fmt.Errorf("speech_options.hotwords[%d] must not be empty", index)
+					}
+					audioRequest.SpeechOptions.Hotwords[index] = hotword
+					hotwordBytes += len(hotword)
+				}
+				if hotwordBytes > 20000 {
+					return errors.New("speech_options.hotwords must not exceed 20000 UTF-8 bytes in total")
+				}
+				if len(audioRequest.SpeechOptions.Replacements) > 5000 {
+					return errors.New("speech_options.replacements must contain at most 5000 entries")
+				}
+				replacementBytes := 0
+				for source, replacement := range audioRequest.SpeechOptions.Replacements {
+					if strings.TrimSpace(source) == "" || strings.TrimSpace(replacement) == "" {
+						return errors.New("speech_options.replacements keys and values must not be empty")
+					}
+					replacementBytes += len(source) + len(replacement)
+				}
+				if replacementBytes > 40000 {
+					return errors.New("speech_options.replacements must not exceed 40000 UTF-8 bytes in total")
+				}
+				if audioRequest.SpeechOptions.Context != nil {
+					if len(audioRequest.SpeechOptions.Context.Texts) > 20 {
+						return errors.New("speech_options.context.texts must contain at most 20 entries")
+					}
+					totalContextBytes := 0
+					for index, text := range audioRequest.SpeechOptions.Context.Texts {
+						text = strings.TrimSpace(text)
+						if text == "" {
+							return fmt.Errorf("speech_options.context.texts[%d] must not be empty", index)
+						}
+						audioRequest.SpeechOptions.Context.Texts[index] = text
+						totalContextBytes += len(text)
+					}
+					if totalContextBytes > 8000 {
+						return errors.New("speech_options.context.texts must not exceed 8000 UTF-8 bytes in total")
+					}
+				}
+			}
 			if len(audioRequest.SubtitleFormats) > 0 {
 				return errors.New("doubao-seed-asr-flash does not support subtitle_formats; use response_format=srt or vtt")
 			}
