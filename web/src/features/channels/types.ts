@@ -113,6 +113,12 @@ export interface ChannelOtherSettings {
   upstream_model_update_last_check_time?: number
   upstream_model_update_last_detected_models?: string[]
   advanced_custom?: AdvancedCustomConfig
+  volc_speech?: VolcSpeechConfig
+}
+
+export interface VolcSpeechConfig {
+  default_tts_speaker?: string
+  asr_hotword_table_id?: string
 }
 
 export interface AdvancedCustomConfig {

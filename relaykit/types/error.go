@@ -55,6 +55,7 @@ const (
 	ErrorCodeChannelNoAvailableKey        ErrorCode = "channel:no_available_key"
 	ErrorCodeChannelParamOverrideInvalid  ErrorCode = "channel:param_override_invalid"
 	ErrorCodeChannelHeaderOverrideInvalid ErrorCode = "channel:header_override_invalid"
+	ErrorCodeChannelConfigInvalid         ErrorCode = "channel:config_invalid"
 	ErrorCodeChannelModelMappedError      ErrorCode = "channel:model_mapped_error"
 	ErrorCodeChannelAwsClientError        ErrorCode = "channel:aws_client_error"
 	ErrorCodeChannelInvalidKey            ErrorCode = "channel:invalid_key"
@@ -91,6 +92,7 @@ type NewAPIError struct {
 	Err            error
 	RelayError     any
 	skipRetry      bool
+	forceRetry     bool
 	recordErrorLog *bool
 	errorType      ErrorType
 	errorCode      ErrorCode
@@ -378,9 +380,23 @@ func IsSkipRetryError(err *NewAPIError) bool {
 	return err.skipRetry
 }
 
+func IsForceRetryError(err *NewAPIError) bool {
+	if err == nil {
+		return false
+	}
+
+	return err.forceRetry
+}
+
 func ErrOptionWithSkipRetry() NewAPIErrorOptions {
 	return func(e *NewAPIError) {
 		e.skipRetry = true
+	}
+}
+
+func ErrOptionWithForceRetry() NewAPIErrorOptions {
+	return func(e *NewAPIError) {
+		e.forceRetry = true
 	}
 }
 

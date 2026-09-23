@@ -380,7 +380,8 @@ func (m *Message) writeEvent(buf *bytes.Buffer) error {
 func (m *Message) writeSessionID(buf *bytes.Buffer) error {
 	switch m.EventType {
 	case EventType_StartConnection, EventType_FinishConnection,
-		EventType_ConnectionStarted, EventType_ConnectionFailed:
+		EventType_ConnectionStarted, EventType_ConnectionFailed,
+		EventType_ConnectionFinished:
 		return nil
 	}
 
@@ -420,6 +421,10 @@ func (m *Message) writePayload(buf *bytes.Buffer) error {
 }
 
 func (m *Message) readers() (readers []func(*bytes.Buffer) error, _ error) {
+	if m.MsgTypeFlag == MsgTypeFlagWithEvent {
+		readers = append(readers, m.readEvent, m.readSessionID, m.readConnectID)
+	}
+
 	switch m.MsgType {
 	case MsgTypeFullClientRequest, MsgTypeFullServerResponse, MsgTypeFrontEndResultServer, MsgTypeAudioOnlyClient, MsgTypeAudioOnlyServer:
 		if m.MsgTypeFlag == MsgTypeFlagPositiveSeq || m.MsgTypeFlag == MsgTypeFlagNegativeSeq {
@@ -429,10 +434,6 @@ func (m *Message) readers() (readers []func(*bytes.Buffer) error, _ error) {
 		readers = append(readers, m.readErrorCode)
 	default:
 		return nil, fmt.Errorf("unsupported message type: %d", m.MsgType)
-	}
-
-	if m.MsgTypeFlag == MsgTypeFlagWithEvent {
-		readers = append(readers, m.readEvent, m.readSessionID, m.readConnectID)
 	}
 
 	readers = append(readers, m.readPayload)

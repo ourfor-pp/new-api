@@ -126,7 +126,13 @@ type ChannelOtherSettings struct {
 	// ToolLossPolicy is a channel-level opt-in for request-phase conversion
 	// rejection. Empty follows the default allow policy. Accepted values:
 	// "", "allow", "safe", "strict".
-	ToolLossPolicy string `json:"tool_loss_policy,omitempty"`
+	ToolLossPolicy string            `json:"tool_loss_policy,omitempty"`
+	VolcSpeech     *VolcSpeechConfig `json:"volc_speech,omitempty"`
+}
+
+type VolcSpeechConfig struct {
+	DefaultTTSSpeaker string `json:"default_tts_speaker,omitempty"`
+	ASRHotwordTableID string `json:"asr_hotword_table_id,omitempty"`
 }
 
 func (s *ChannelOtherSettings) IsOpenRouterEnterprise() bool {

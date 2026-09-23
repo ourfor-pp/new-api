@@ -174,6 +174,21 @@ func getImageToken(c *gin.Context, fileMeta *types.FileMeta, model string, strea
 }
 
 func EstimateRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *relaycommon.RelayInfo) (int, error) {
+	if info != nil {
+		request, isAudioRequest := info.Request.(*dto.AudioRequest)
+		if isAudioRequest {
+			effectiveModelName, _, err := relaycommon.ResolveMappedModelName(info.OriginModelName, c.GetString("model_mapping"))
+			if err != nil {
+				return 0, err
+			}
+			if effectiveModelName == constant.ModelDoubaoSeedTTS20 {
+				return utf8.RuneCountInString(request.Input), nil
+			}
+			if effectiveModelName == constant.ModelDoubaoSeedASRFlash && request.LocalAudioDurationMS > 0 {
+				return common.QuotaRound(float64(request.LocalAudioDurationMS) / 60000 * 1000), nil
+			}
+		}
+	}
 	// 是否统计token
 	if !constant.CountToken {
 		return 0, nil

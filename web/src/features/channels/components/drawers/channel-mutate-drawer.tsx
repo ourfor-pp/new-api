@@ -4062,6 +4062,63 @@ export function ChannelMutateDrawer({
               />
             )}
 
+            {currentType === 45 && (
+              <>
+                <FormField
+                  control={form.control}
+                  name='volc_speech_default_tts_speaker'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>
+                        {t('Seed-TTS 2.0 default speaker ID')}
+                      </FormLabel>
+                      <FormControl>
+                        <Input
+                          disabled={sensitiveLocked}
+                          placeholder={t(
+                            'Enter a VolcEngine Seed-TTS 2.0 speaker ID'
+                          )}
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        {t(
+                          'Used when clients send an OpenAI standard voice such as alloy. A VolcEngine speaker ID sent by the client is passed through unchanged.'
+                        )}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name='volc_speech_asr_hotword_table_id'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>
+                        {t('ASR platform hotword table ID')}
+                      </FormLabel>
+                      <FormControl>
+                        <Input
+                          disabled={sensitiveLocked}
+                          placeholder={t(
+                            'Enter a VolcEngine ASR hotword table ID'
+                          )}
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        {t(
+                          'Configured on the channel and never accepted from client requests.'
+                        )}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </>
+            )}
+
             {/* Coze (type 49) */}
             {currentType === 49 && (
               <FormField

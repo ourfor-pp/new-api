@@ -66,7 +66,13 @@ func GetRequestBody(c *gin.Context) (io.Seeker, error) {
 	contentLength := c.Request.ContentLength
 
 	// 使用新的存储系统
-	storage, err := CreateBodyStorageFromReader(c.Request.Body, contentLength, maxBytes)
+	var storage BodyStorage
+	var err error
+	if shouldSpoolTranscriptionMultipartToDisk(c, contentLength) {
+		storage, err = CreateDiskBodyStorageFromReader(c.Request.Body, maxBytes)
+	} else {
+		storage, err = CreateBodyStorageFromReader(c.Request.Body, contentLength, maxBytes)
+	}
 	_ = c.Request.Body.Close()
 
 	if err != nil {
@@ -80,6 +86,24 @@ func GetRequestBody(c *gin.Context) (io.Seeker, error) {
 	c.Set(KeyBodyStorage, storage)
 
 	return storage, nil
+}
+
+func shouldSpoolTranscriptionMultipartToDisk(c *gin.Context, contentLength int64) bool {
+	if c == nil || c.Request == nil || c.Request.URL == nil {
+		return false
+	}
+	if c.Request.URL.Path != "/v1/audio/transcriptions" {
+		return false
+	}
+	if !strings.Contains(c.Request.Header.Get("Content-Type"), gin.MIMEMultipartPOSTForm) {
+		return false
+	}
+	threshold := GetDiskCacheThresholdBytes()
+	multipartLimit := multipartMemoryLimit()
+	if threshold <= 0 || threshold > multipartLimit {
+		threshold = multipartLimit
+	}
+	return contentLength <= 0 || contentLength >= threshold
 }
 
 // GetBodyStorage 获取请求体存储对象（用于需要多次读取的场景）
@@ -128,6 +152,40 @@ func UnmarshalBodyReusable(c *gin.Context, v any) error {
 		c.Request.Body = io.NopCloser(storage)
 		return nil
 	}
+	if strings.Contains(contentType, gin.MIMEMultipartPOSTForm) {
+		form, formErr := ParseMultipartFormReusable(c)
+		if formErr != nil {
+			return formErr
+		}
+		defer form.RemoveAll()
+		formMap := make(map[string]any, len(form.Value))
+		timestampGranularities := append(
+			append([]string(nil), form.Value["timestamp_granularities"]...),
+			form.Value["timestamp_granularities[]"]...,
+		)
+		for key, values := range form.Value {
+			if key == "timestamp_granularities" || key == "timestamp_granularities[]" {
+				continue
+			}
+			if key == "speech_options" && len(values) == 1 {
+				var speechOptions any
+				if err := Unmarshal([]byte(values[0]), &speechOptions); err != nil {
+					return fmt.Errorf("speech_options must be a JSON object: %w", err)
+				}
+				formMap[key] = speechOptions
+				continue
+			}
+			if len(values) == 1 {
+				formMap[key] = values[0]
+			} else {
+				formMap[key] = values
+			}
+		}
+		if len(timestampGranularities) > 0 {
+			formMap["timestamp_granularities"] = timestampGranularities
+		}
+		return processFormMap(formMap, v)
+	}
 
 	requestBody, err := storage.Bytes()
 	if err != nil {
@@ -137,8 +195,6 @@ func UnmarshalBodyReusable(c *gin.Context, v any) error {
 		err = Unmarshal(requestBody, v)
 	} else if strings.Contains(contentType, gin.MIMEPOSTForm) {
 		err = parseFormData(requestBody, v)
-	} else if strings.Contains(contentType, gin.MIMEMultipartPOSTForm) {
-		err = parseMultipartFormData(c, requestBody, v)
 	} else {
 		// skip for now
 		// TODO: someday non json request have variant model, we will need to implementation this
@@ -257,10 +313,6 @@ func ParseMultipartFormReusable(c *gin.Context) (*multipart.Form, error) {
 	if err != nil {
 		return nil, err
 	}
-	requestBody, err := storage.Bytes()
-	if err != nil {
-		return nil, err
-	}
 
 	// Use the original Content-Type saved on first call to avoid boundary
 	// mismatch when callers overwrite c.Request.Header after multipart rebuild.
@@ -276,17 +328,23 @@ func ParseMultipartFormReusable(c *gin.Context) (*multipart.Form, error) {
 		return nil, err
 	}
 
-	reader := multipart.NewReader(bytes.NewReader(requestBody), boundary)
-	form, err := reader.ReadForm(multipartMemoryLimit())
-	if err != nil {
+	if _, err = storage.Seek(0, io.SeekStart); err != nil {
 		return nil, err
 	}
+	reader := multipart.NewReader(ReaderOnly(storage), boundary)
+	form, err := reader.ReadForm(multipartMemoryLimit())
 
 	// Reset request body
 	if _, seekErr := storage.Seek(0, io.SeekStart); seekErr != nil {
 		return nil, seekErr
 	}
 	c.Request.Body = io.NopCloser(storage)
+	if err != nil {
+		if form != nil {
+			_ = form.RemoveAll()
+		}
+		return nil, err
+	}
 	return form, nil
 }
 

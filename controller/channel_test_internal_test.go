@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -11,10 +12,12 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	kittypes "github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -474,6 +477,54 @@ func TestRunChannelTestWorkersStopsAfterCancellation(t *testing.T) {
 	}
 	assert.Equal(t, channelTestSummary{Tested: 2, Succeeded: 2}, summary)
 	assert.Equal(t, []int{0}, progress)
+}
+
+func TestBuildVolcSpeechChannelTestRequests(t *testing.T) {
+	ttsRequest, ok := buildTestRequest(constant.ModelDoubaoSeedTTS20, "", nil, false).(*dto.AudioRequest)
+	require.True(t, ok)
+	assert.Equal(t, "alloy", ttsRequest.Voice)
+	assert.Equal(t, "mp3", ttsRequest.ResponseFormat)
+	assert.NotEmpty(t, ttsRequest.Input)
+
+	asrRequest, ok := buildTestRequest(constant.ModelDoubaoSeedASRFlash, "", nil, false).(*dto.AudioRequest)
+	require.True(t, ok)
+	assert.Equal(t, "wav", asrRequest.LocalAudioFormat)
+	assert.Equal(t, int64(200), asrRequest.LocalAudioDurationMS)
+
+	body, contentType, err := buildVolcASRChannelTestBody(constant.ModelDoubaoSeedASRFlash)
+	require.NoError(t, err)
+	request := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", bytes.NewReader(body))
+	request.Header.Set("Content-Type", contentType)
+	require.NoError(t, request.ParseMultipartForm(1<<20))
+	file, _, err := request.FormFile("file")
+	require.NoError(t, err)
+	defer file.Close()
+	wav, err := io.ReadAll(file)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(wav), 44)
+	assert.Equal(t, "RIFF", string(wav[:4]))
+	assert.Equal(t, "WAVE", string(wav[8:12]))
+	assert.Equal(t, constant.ModelDoubaoSeedASRFlash, request.FormValue("model"))
+}
+
+func TestShouldRetryHonorsForceRetryWithoutChangingDefaultGatewayTimeout(t *testing.T) {
+	context, _ := gin.CreateTestContext(httptest.NewRecorder())
+	context.Request = httptest.NewRequest(http.MethodPost, "/v1/audio/speech", nil)
+
+	defaultError := kittypes.NewErrorWithStatusCode(fmt.Errorf("gateway timeout"), kittypes.ErrorCodeBadResponse, http.StatusGatewayTimeout)
+	assert.False(t, service.ShouldRetryRelayError(context, defaultError, 1))
+
+	forcedError := kittypes.NewErrorWithStatusCode(
+		fmt.Errorf("gateway timeout"),
+		kittypes.ErrorCodeBadResponse,
+		http.StatusGatewayTimeout,
+		kittypes.ErrOptionWithForceRetry(),
+	)
+	assert.True(t, service.ShouldRetryRelayError(context, forcedError, 1))
+	assert.False(t, service.ShouldRetryRelayError(context, forcedError, 0))
+
+	service.GetChannelConstraints(context).AddPin(hostdto.ChannelPin{ChannelId: 1, Source: hostdto.PinSourceToken, Rank: hostdto.PinRankToken, RetryMode: hostdto.PinRetrySingleAttempt})
+	assert.False(t, service.ShouldRetryRelayError(context, forcedError, 1))
 }
 
 func TestTestAllChannelsRejectsExistingActiveTask(t *testing.T) {

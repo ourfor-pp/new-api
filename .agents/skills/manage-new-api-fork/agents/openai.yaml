@@ -1,0 +1,4 @@
+interface:
+  display_name: "管理 new-api Fork"
+  short_description: "同步上游版本、维护定制分支并规范完成 GitHub PR 与候选发布"
+  default_prompt: "使用 $manage-new-api-fork 评估并执行这次上游同步或 GitHub 协作。"

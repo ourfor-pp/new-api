@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/QuantumNous/new-api/common"
 	channelconstant "github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/claude"
@@ -47,6 +48,121 @@ func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayIn
 }
 
 func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.AudioRequest) (io.Reader, error) {
+	upstreamModelName := info.EffectiveUpstreamModelName()
+	if upstreamModelName == channelconstant.ModelDoubaoSeedTTS20 {
+		if _, _, _, err := parseVolcSpeechCredential(info.ApiKey); err != nil {
+			return nil, types.NewError(err, types.ErrorCodeChannelInvalidKey)
+		}
+		volcRequest, encoding, err := buildVolcTTSV3Request(request, info.ChannelOtherSettings.VolcSpeech)
+		if err != nil {
+			return nil, err
+		}
+		c.Set(contextKeyResponseFormat, encoding)
+		speechOptions := make([]string, 0)
+		contextTextCount := 0
+		if request.SpeechOptions != nil {
+			if request.SpeechOptions.SampleRate != nil {
+				speechOptions = append(speechOptions, "sample_rate")
+			}
+			if request.SpeechOptions.Context != nil && len(request.SpeechOptions.Context.Texts) > 0 {
+				speechOptions = append(speechOptions, "context.texts")
+				contextTextCount = len(request.SpeechOptions.Context.Texts)
+			}
+		}
+		if strings.TrimSpace(request.Instructions) != "" {
+			speechOptions = append(speechOptions, "instructions")
+		}
+		info.VolcSpeechAudit = &relaycommon.VolcSpeechAuditInfo{
+			ResourceID:             volcTTSResourceID,
+			Protocol:               volcTTSProtocol,
+			TimestampGranularities: append([]string(nil), request.TimestampGranularities...),
+			SubtitleFormats:        append([]string(nil), request.SubtitleFormats...),
+			SpeechOptions:          speechOptions,
+			ContextTextCount:       contextTextCount,
+		}
+		setVolcSpeechAuditContext(c, info.VolcSpeechAudit)
+		jsonData, err := common.Marshal(volcRequest)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal volcengine TTS request: %w", err)
+		}
+		return bytes.NewReader(jsonData), nil
+	}
+
+	if upstreamModelName == channelconstant.ModelDoubaoSeedASRFlash {
+		if _, _, _, err := parseVolcSpeechCredential(info.ApiKey); err != nil {
+			return nil, types.NewError(err, types.ErrorCodeChannelInvalidKey)
+		}
+		if info.RelayMode != constant.RelayModeAudioTranscription {
+			return nil, errors.New("doubao-seed-asr-flash only supports audio transcriptions")
+		}
+		requestBody, err := buildVolcASRFlashRequestBody(c, request, info.ChannelOtherSettings.VolcSpeech)
+		if err != nil {
+			return nil, err
+		}
+		c.Set(contextKeyResponseFormat, request.ResponseFormat)
+		speechOptions := make([]string, 0)
+		contextTextCount := 0
+		hotwordCount := 0
+		replacementCount := 0
+		if request.SpeechOptions != nil {
+			if request.SpeechOptions.TextNormalization != nil {
+				speechOptions = append(speechOptions, fmt.Sprintf("text_normalization=%t", *request.SpeechOptions.TextNormalization))
+			}
+			if request.SpeechOptions.Punctuation != nil {
+				speechOptions = append(speechOptions, fmt.Sprintf("punctuation=%t", *request.SpeechOptions.Punctuation))
+			}
+			if request.SpeechOptions.SemanticSmoothing != nil {
+				speechOptions = append(speechOptions, fmt.Sprintf("semantic_smoothing=%t", *request.SpeechOptions.SemanticSmoothing))
+			}
+			if request.SpeechOptions.SensitiveWordFilter != nil {
+				speechOptions = append(speechOptions, fmt.Sprintf("sensitive_word_filter=%t", *request.SpeechOptions.SensitiveWordFilter))
+			}
+			if request.SpeechOptions.VADSegmentation != nil {
+				speechOptions = append(speechOptions, fmt.Sprintf("vad_segmentation=%t", *request.SpeechOptions.VADSegmentation))
+			}
+			if request.SpeechOptions.SpeakerDiarization != nil {
+				speechOptions = append(speechOptions, fmt.Sprintf("speaker_diarization=%t", *request.SpeechOptions.SpeakerDiarization))
+			}
+			if request.SpeechOptions.ChannelMode != "" {
+				speechOptions = append(speechOptions, "channel_mode="+request.SpeechOptions.ChannelMode)
+			}
+			if request.SpeechOptions.ForceSegmentAfterMS != nil {
+				speechOptions = append(speechOptions, "force_segment_after_ms")
+			}
+			if len(request.SpeechOptions.Hotwords) > 0 {
+				speechOptions = append(speechOptions, "hotwords")
+				hotwordCount = len(request.SpeechOptions.Hotwords)
+			}
+			if len(request.SpeechOptions.Replacements) > 0 {
+				speechOptions = append(speechOptions, "replacements")
+				replacementCount = len(request.SpeechOptions.Replacements)
+			}
+			if request.SpeechOptions.Context != nil && len(request.SpeechOptions.Context.Texts) > 0 {
+				speechOptions = append(speechOptions, "context.texts")
+				contextTextCount = len(request.SpeechOptions.Context.Texts)
+			}
+		}
+		if info.ChannelOtherSettings.VolcSpeech != nil &&
+			strings.TrimSpace(info.ChannelOtherSettings.VolcSpeech.ASRHotwordTableID) != "" {
+			speechOptions = append(speechOptions, "platform_hotword_table=true")
+		}
+		info.VolcSpeechAudit = &relaycommon.VolcSpeechAuditInfo{
+			ResourceID:             volcASRFlashResourceID,
+			Protocol:               volcASRFlashProtocol,
+			TimestampGranularities: append([]string(nil), request.TimestampGranularities...),
+			SpeechOptions:          speechOptions,
+			ContextTextCount:       contextTextCount,
+			HotwordCount:           hotwordCount,
+			ReplacementCount:       replacementCount,
+		}
+		switch strings.ToLower(request.ResponseFormat) {
+		case "srt", "vtt":
+			info.VolcSpeechAudit.SubtitleFormats = []string{strings.ToLower(request.ResponseFormat)}
+		}
+		setVolcSpeechAuditContext(c, info.VolcSpeechAudit)
+		return requestBody, nil
+	}
+
 	if info.RelayMode != constant.RelayModeAudioSpeech {
 		return nil, errors.New("unsupported audio relay mode")
 	}
@@ -81,7 +197,7 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 			ReqID:     generateRequestID(),
 			Text:      request.Input,
 			Operation: "submit",
-			Model:     info.OriginModelName,
+			Model:     upstreamModelName,
 		},
 	}
 
@@ -237,6 +353,14 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 }
 
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
+	upstreamModelName := info.EffectiveUpstreamModelName()
+	if upstreamModelName == channelconstant.ModelDoubaoSeedTTS20 {
+		return volcTTSV3URL, nil
+	}
+	if upstreamModelName == channelconstant.ModelDoubaoSeedASRFlash {
+		return volcASRFlashURL, nil
+	}
+
 	baseUrl := info.ChannelBaseUrl
 	if baseUrl == "" {
 		baseUrl = channelconstant.GetChannelBaseURL(channelconstant.ChannelTypeVolcEngine)
@@ -287,6 +411,32 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {
 	channel.SetupApiRequestHeader(info, c, req)
 
+	upstreamModelName := info.EffectiveUpstreamModelName()
+	if upstreamModelName == channelconstant.ModelDoubaoSeedTTS20 {
+		headers, err := buildVolcSpeechHeaders(info.ApiKey, volcTTSResourceID, "X-Api-App-Id")
+		if err != nil {
+			return err
+		}
+		for key, values := range headers {
+			(*req)[key] = values
+		}
+		req.Set("X-Control-Require-Usage-Tokens-Return", "*")
+		req.Set("Content-Type", gin.MIMEJSON)
+		return nil
+	}
+	if upstreamModelName == channelconstant.ModelDoubaoSeedASRFlash {
+		headers, err := buildVolcSpeechHeaders(info.ApiKey, volcASRFlashResourceID, "X-Api-App-Key")
+		if err != nil {
+			return err
+		}
+		for key, values := range headers {
+			(*req)[key] = values
+		}
+		req.Set("X-Api-Sequence", "-1")
+		req.Set("Content-Type", gin.MIMEJSON)
+		return nil
+	}
+
 	if info.RelayMode == constant.RelayModeAudioSpeech {
 		parts := strings.Split(info.ApiKey, "|")
 		if len(parts) == 2 {
@@ -331,6 +481,12 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
+	upstreamModelName := info.EffectiveUpstreamModelName()
+	if upstreamModelName == channelconstant.ModelDoubaoSeedTTS20 ||
+		upstreamModelName == channelconstant.ModelDoubaoSeedASRFlash {
+		return doVolcSpeechRequest(a, c, info, requestBody)
+	}
+
 	if info.RelayMode == constant.RelayModeAudioSpeech {
 		baseUrl := info.ChannelBaseUrl
 		if baseUrl == "" {
@@ -347,6 +503,14 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 }
 
 func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
+	upstreamModelName := info.EffectiveUpstreamModelName()
+	if upstreamModelName == channelconstant.ModelDoubaoSeedTTS20 {
+		return handleVolcTTSV3Response(c, resp, info, c.GetString(contextKeyResponseFormat))
+	}
+	if upstreamModelName == channelconstant.ModelDoubaoSeedASRFlash {
+		return handleVolcASRFlashResponse(c, resp, info, c.GetString(contextKeyResponseFormat))
+	}
+
 	if info.RelayFormat == types.RelayFormatClaude {
 		if _, ok := channelconstant.ChannelSpecialBases[info.ChannelBaseUrl]; ok {
 			adaptor := claude.Adaptor{}

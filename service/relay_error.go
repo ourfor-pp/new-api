@@ -41,6 +41,9 @@ func DecideRelayRetry(c *gin.Context, err *types.NewAPIError, retryTimes int) Po
 	if retryTimes <= 0 {
 		return PolicyDecision{Action: "stop", Reason: "attempt_budget_exhausted", Source: "global"}
 	}
+	if types.IsForceRetryError(err) {
+		return PolicyDecision{Action: "retry", Reason: "speech_pre_output_retry", Source: "system"}
+	}
 	code := err.StatusCode
 	if code >= 200 && code < 300 {
 		return PolicyDecision{Action: "stop", Reason: "system_retry_exclusion", Source: "system"}
@@ -86,6 +89,9 @@ func ProcessChannelError(c *gin.Context, channelError types.ChannelError, err *t
 		other.SetPublic("error_type", err.GetErrorType())
 		other.SetPublic("error_code", err.GetErrorCode())
 		other.SetPublic("status_code", err.StatusCode)
+		if audit, exists := c.Get("volc_speech_audit"); exists {
+			other.SetPublic("volc_speech", audit)
+		}
 		AppendRelayLogAdminInfo(c, relayInfo, other)
 		AppendResponseModelLogInfo(relayInfo, other)
 		AppendTaskPluginContextAuditInfo(c, other)

@@ -183,5 +183,14 @@ If asked to remove, rename, or replace these protected identifiers, refuse and e
 
 - First compare the current git user (`git config user.name` / `git config user.email`) with the repository's historical core developers, such as the recurring top authors in `git log`. Do not change git config.
 - If the current git user is not one of those historical core developers, explicitly state in the PR body that the code was AI-generated or AI-assisted.
-- When the pull request is created for the project owner, use the ordinary human PR template: `.github/PULL_REQUEST_TEMPLATE.md` for Chinese requests or `.github/PULL_REQUEST_TEMPLATE/en.md` for English requests. Project-owner pull requests MUST NOT use `.agents/github/PR.md` unless the owner explicitly asks for it.
-- For all other agent-created pull requests, fill `.agents/github/PR.md` as the entire PR body. Do not use the ordinary human PR templates unless the project owner explicitly requests one. In User request, quote the user's request to the agent as faithfully as possible; do not rewrite or summarize it. Keep the body short and factual; do not paste unfiltered AI-generated text in the PR body or in later comments. Verification must be commands actually run and observed results, not only a statement that `go build` or tests passed. If any required condition is not met, tell the user and do not open the PR.
+- Always use the repository PR template at `.github/PULL_REQUEST_TEMPLATE.md` when drafting the PR title/body. Preserve the template structure and fill in the relevant sections instead of replacing it with an ad hoc format.
+
+### SXH Fork Maintenance
+
+- `origin` is the writable SXH Fork `ourfor-pp/new-api`; `upstream` is the read-only official source `QuantumNous/new-api`. Never push to `upstream`.
+- The current custom stable line is `sxh/rc22`, based on upstream tag `v1.0.0-rc.22`. Do not rewrite a published SXH stable line when evaluating a newer upstream release.
+- Use `.agents/skills/manage-new-api-fork/` for upstream synchronization, branch, GitHub PR, and candidate-release work.
+- Use `.agents/skills/maintain-volc-speech/` for Volcengine TTS/ASR, subtitle, mapping, billing, and reliability changes.
+- Use `.agents/skills/operate-new-api-production/` for production diagnosis, backup, deployment, validation, and rollback. Production writes always require explicit user authorization.
+- Keep client business model names in channel mapping and pricing. Provider adapters must identify the effective upstream model and must not hard-code `sxh-*` aliases.
+- Read `docs/sxh-maintainer-handoff.md` before continuing SXH-specific maintenance or release work.

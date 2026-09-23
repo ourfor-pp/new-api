@@ -1,5 +1,7 @@
 package volcengine
 
+import "github.com/QuantumNous/new-api/constant"
+
 var ModelList = []string{
 	"Doubao-pro-128k",
 	"Doubao-pro-32k",
@@ -14,6 +16,8 @@ var ModelList = []string{
 	"seedance-1-0-pro-250528",
 	"doubao-seed-1-6-thinking-250715",
 	"seed-1-6-thinking-250715",
+	constant.ModelDoubaoSeedTTS20,
+	constant.ModelDoubaoSeedASRFlash,
 }
 
 var ChannelName = "volcengine"

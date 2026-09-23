@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/QuantumNous/new-api/common"
+	channelconstant "github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -32,6 +33,9 @@ func AudioHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
+	if err = helper.ValidateVolcSpeechAudioRequest(c, info.RelayMode, request); err != nil {
+		return newAudioConvertError(err)
+	}
 
 	adaptor := GetAdaptor(info.ApiType)
 	if adaptor == nil {
@@ -41,7 +45,7 @@ func AudioHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 
 	ioReader, err := adaptor.ConvertAudioRequest(c, info, *request)
 	if err != nil {
-		return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		return newAudioConvertError(err)
 	}
 
 	resp, err := adaptor.DoRequest(c, info, ioReader)
@@ -53,11 +57,15 @@ func AudioHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	var httpResp *http.Response
 	if resp != nil {
 		httpResp = resp.(*http.Response)
+		if info.VolcSpeechAudit != nil {
+			info.VolcSpeechAudit.LogID = httpResp.Header.Get("X-Tt-Logid")
+			c.Set("volc_speech_audit", info.VolcSpeechAudit.LogValue())
+		}
 		if httpResp.StatusCode != http.StatusOK {
 			newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)
 			// reset status code 重置状态码
 			service.ResetStatusCode(newAPIError, statusCodeMappingStr)
-			return newAPIError
+			return markVolcSpeechGatewayTimeoutRetry(info.EffectiveUpstreamModelName(), httpResp.StatusCode, newAPIError)
 		}
 	}
 
@@ -74,4 +82,22 @@ func AudioHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	}
 
 	return nil
+}
+
+func newAudioConvertError(err error) *types.NewAPIError {
+	newAPIError := types.NewError(err, types.ErrorCodeConvertRequestFailed)
+	if types.IsChannelError(newAPIError) {
+		return newAPIError
+	}
+	return types.NewError(newAPIError, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+}
+
+func markVolcSpeechGatewayTimeoutRetry(modelName string, statusCode int, err *types.NewAPIError) *types.NewAPIError {
+	if err == nil || !channelconstant.IsVolcSpeechModel(modelName) {
+		return err
+	}
+	if statusCode != http.StatusGatewayTimeout && statusCode != 524 {
+		return err
+	}
+	return types.NewError(err, err.GetErrorCode(), types.ErrOptionWithForceRetry())
 }
