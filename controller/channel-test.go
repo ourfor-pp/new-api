@@ -109,7 +109,13 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 			}
 		}
 	}
-	if constant.IsVolcSpeechModel(testModel) {
+	// Resolve the protocol before constructing the test request, but keep the
+	// business model for routing, pricing and consumption logs.
+	mappedModel, _, mappingErr := relaycommon.ResolveMappedModelName(testModel, channel.GetModelMapping())
+	// ModelMappedHelper below reports mapping errors after the test context is initialized.
+	protocolModel := testModel
+	if mappingErr == nil && constant.IsVolcSpeechModel(mappedModel) {
+		protocolModel = mappedModel
 		isStream = false
 	}
 
@@ -154,7 +160,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	if isStream && constant.EndpointType(endpointType) == constant.EndpointTypeGemini {
 		requestPath = strings.Replace(requestPath, ":generateContent", ":streamGenerateContent", 1)
 	}
-	switch testModel {
+	switch protocolModel {
 	case constant.ModelDoubaoSeedTTS20:
 		requestPath = "/v1/audio/speech"
 	case constant.ModelDoubaoSeedASRFlash:
@@ -163,7 +169,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 
 	var inboundBody io.Reader
 	contentType := "application/json"
-	if testModel == constant.ModelDoubaoSeedASRFlash {
+	if protocolModel == constant.ModelDoubaoSeedASRFlash {
 		body, multipartContentType, buildErr := buildVolcASRChannelTestBody(testModel)
 		if buildErr != nil {
 			return testResult{
@@ -254,11 +260,12 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 			relayFormat = types.RelayFormatOpenAIAudio
 		}
 	}
-	if constant.IsVolcSpeechModel(testModel) {
+	if constant.IsVolcSpeechModel(protocolModel) {
 		relayFormat = types.RelayFormatOpenAIAudio
 	}
 
-	request := buildTestRequest(testModel, endpointType, channel, isStream)
+	request := buildTestRequest(protocolModel, endpointType, channel, isStream)
+	request.SetModelName(testModel)
 
 	info, err := relaycommon.GenRelayInfo(c, relayFormat, request, nil)
 

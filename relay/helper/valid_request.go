@@ -123,6 +123,7 @@ func validateSpeechOptionsFields(c *gin.Context) error {
 		if err != nil {
 			return err
 		}
+		defer form.RemoveAll()
 		values := form.Value["speech_options"]
 		if len(values) == 0 {
 			return nil

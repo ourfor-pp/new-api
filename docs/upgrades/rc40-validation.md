@@ -2,7 +2,7 @@
 
 ## 结论和版本边界
 
-已在独立工作树 `.tmp/rc40-validation`、分支 `upgrade/rc40-validation` 上集成上游 `v1.0.0-rc.40`（`0aec08fee`）与 SXH `sxh/rc22`（`c480f4571`）。版本标识为 `1.0.0-rc.40-sxh.dev`，不是发布候选，也未建立新稳定线。
+初次合并验证在独立工作树完成；后续在主工作目录 `/home/joptear/new-api` 维护分支 `upgrade/rc40-validation`。该分支集成上游 `v1.0.0-rc.40`（`0aec08fee`）与 SXH `sxh/rc22`（`c480f4571`）。版本标识为 `1.0.0-rc.40-sxh.dev`，不是发布候选，也未建立新稳定线。
 
 后端、RelayKit、语音并发回归、前端渠道测试及构建、三种真实数据库迁移验证通过。全局前端 lint 未通过，但与未修改的 rc.40 相比，182 个错误完全一致，没有新增错误。这次验证支持继续隔离联调，不等同于生产验收或插件系统已稳定。
 
@@ -38,6 +38,13 @@
 
 本地原始日志和合成数据验证脚本保存在主仓库的 `.tmp/rc40-validation-evidence/`，不纳入 Git。它们仅含本地测试数据；临时数据库容器在验证完成后删除。
 
+## 本地 review 修订
+
+- multipart 语音选项校验在所有返回路径释放解析时产生的临时文件，保留请求体重放能力。回归覆盖未传选项、有效选项、未知字段、重复字段和 `null`。
+- 渠道测试先按最终映射模型选择语音协议、ASR 上传体和请求 DTO，保留业务模型用于路由、价格及日志。回归通过拦截传输验证 TTS/ASR 链式别名的实际出站请求，不调用真实提供方。
+- 新增回归用例在修订前代码上均失败、修订后通过；检查命令为 `go test ./controller ./relay/helper -run 'TestMappedVolcChannelTestSendsAudioProtocolWithBusinessModel|TestSpeechOptionsValidationCleansMultipartFilesAndPreservesReplay'`。
+- 修订后根模块全量 `go test -p 2 -timeout 10m ./...`、语音定向 race 和 `git diff --check` 均通过。
+
 ## 上线前尚需完成
 
 - 使用生产数据库副本演练实际渠道配置、权限、账务和迁移；合成数据矩阵不能覆盖全部存量状态。
@@ -46,4 +53,4 @@
 - 插件安装/升级/回退、管理界面真实操作、生产流量性能与长时间运行尚未验证。
 - 发布前明确处理上游现有 lint 问题，并从审定的干净提交构建唯一版本镜像。
 
-未推送、未创建 PR、未发布镜像、未修改生产服务或稳定分支。后续生产部署仍需单独授权。
+推送目标仅为 SXH Fork `ourfor-pp/new-api`（`origin`），分支为 `upgrade/rc40-validation`；不向官方 `upstream` 推送。未创建 PR、未发布镜像、未修改生产服务或稳定分支。后续生产部署仍需单独授权。

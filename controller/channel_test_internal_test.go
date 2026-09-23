@@ -3,10 +3,13 @@ package controller
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -543,4 +546,67 @@ func TestTestAllChannelsRejectsExistingActiveTask(t *testing.T) {
 	require.Equal(t, http.StatusConflict, recorder.Code)
 	require.Contains(t, recorder.Body.String(), existing.TaskID)
 	require.Contains(t, recorder.Body.String(), "已有通道测试任务正在运行或等待中")
+}
+
+type speechChannelTestTransport func(*http.Request) (*http.Response, error)
+
+func (f speechChannelTestTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestMappedVolcChannelTestSendsAudioProtocolWithBusinessModel(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	user := model.User{Username: "speech-review-fixture", Group: "default", Quota: 1000000, Status: common.UserStatusEnabled}
+	require.NoError(t, db.Create(&user).Error)
+	ratios, err := common.Marshal(ratio_setting.GetModelRatioCopy())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(string(ratios))) })
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"customer-tts":1,"customer-asr":1}`))
+	if service.GetHttpClient() == nil {
+		service.InitHttpClient()
+	}
+	client := service.GetHttpClient()
+	originalTransport := client.Transport
+	t.Cleanup(func() { client.Transport = originalTransport })
+	for _, tc := range []struct{ alias, upstream, path, upstreamPath string }{
+		{"customer-tts", constant.ModelDoubaoSeedTTS20, "/v1/audio/speech", "/api/v3/tts/unidirectional"},
+		{"customer-asr", constant.ModelDoubaoSeedASRFlash, "/v1/audio/transcriptions", "/api/v3/auc/bigmodel/recognize/flash"},
+	} {
+		t.Run(tc.alias, func(t *testing.T) {
+			channel := &model.Channel{Id: 1001, Type: constant.ChannelTypeVolcEngine, Key: "synthetic-key", Models: tc.alias, Group: "default",
+				ModelMapping:  common.GetPointer(fmt.Sprintf(`{"%s":"speech-intermediate","speech-intermediate":"%s"}`, tc.alias, tc.upstream)),
+				OtherSettings: `{"volc_speech":{"default_tts_speaker":"fixture-speaker"}}`}
+			calls := 0
+			client.Transport = speechChannelTestTransport(func(r *http.Request) (*http.Response, error) {
+				calls++
+				assert.Equal(t, tc.upstreamPath, r.URL.Path)
+				assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+				data, readErr := io.ReadAll(r.Body)
+				require.NoError(t, readErr)
+				require.NoError(t, r.Body.Close())
+				var payload map[string]any
+				require.NoError(t, common.Unmarshal(data, &payload))
+				if tc.alias == "customer-tts" {
+					require.Contains(t, payload, "req_params")
+				} else {
+					require.Contains(t, payload, "audio")
+				}
+				assert.NotContains(t, payload, "messages")
+				return nil, errors.New("fixture stops before provider execution")
+			})
+			result := testChannel(context.Background(), channel, user.Id, tc.alias, "", true)
+			require.ErrorContains(t, result.localErr, "fixture stops before provider execution")
+			assert.Equal(t, 1, calls)
+			require.NotNil(t, result.context)
+			defer common.CleanupBodyStorage(result.context)
+			assert.Equal(t, tc.path, result.context.Request.URL.Path)
+			assert.Equal(t, tc.alias, common.GetContextKeyString(result.context, constant.ContextKeyOriginalModel))
+			if tc.alias == "customer-asr" {
+				assert.True(t, strings.HasPrefix(result.context.Request.Header.Get("Content-Type"), "multipart/form-data;"))
+				form, parseErr := common.ParseMultipartFormReusable(result.context)
+				require.NoError(t, parseErr)
+				defer form.RemoveAll()
+				assert.Equal(t, []string{tc.alias}, form.Value["model"])
+				require.Len(t, form.File["file"], 1)
+			}
+		})
+	}
 }

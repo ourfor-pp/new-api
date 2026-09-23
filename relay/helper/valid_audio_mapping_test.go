@@ -3,9 +3,12 @@ package helper
 import (
 	"bytes"
 	"encoding/binary"
+	"github.com/QuantumNous/new-api/common"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
 	"github.com/QuantumNous/new-api/constant"
@@ -512,4 +515,60 @@ func TestMappedVolcASRRejectsDuplicateSpeechOptionsAndExplicitZero(t *testing.T)
 		_, err := GetAndValidAudioRequest(context, relayconstant.RelayModeAudioTranscription)
 		require.ErrorContains(t, err, "force_segment_after_ms must be between 200 and 60000")
 	})
+}
+
+func TestSpeechOptionsValidationCleansMultipartFilesAndPreservesReplay(t *testing.T) {
+	previousLimit := constant.MaxFileDownloadMB
+	constant.MaxFileDownloadMB = 1
+	t.Cleanup(func() { constant.MaxFileDownloadMB = previousLimit })
+	for _, tc := range []struct {
+		name      string
+		options   []string
+		wantError string
+	}{
+		{name: "absent"},
+		{name: "valid", options: []string{`{"punctuation":false}`}},
+		{name: "unknown", options: []string{`{"unknown":true}`}, wantError: "unknown speech_options field"},
+		{name: "duplicate", options: []string{`{}`, `{}`}, wantError: "exactly once"},
+		{name: "null", options: []string{`null`}, wantError: "not null"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tempDir := t.TempDir()
+			t.Setenv("TMPDIR", tempDir)
+			audio := bytes.Repeat([]byte{42}, 2<<20)
+			var body bytes.Buffer
+			writer := multipart.NewWriter(&body)
+			file, err := writer.CreateFormFile("file", "fixture.wav")
+			require.NoError(t, err)
+			_, err = file.Write(audio)
+			require.NoError(t, err)
+			for _, value := range tc.options {
+				require.NoError(t, writer.WriteField("speech_options", value))
+			}
+			require.NoError(t, writer.Close())
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", &body)
+			c.Request.Header.Set("Content-Type", writer.FormDataContentType())
+			t.Cleanup(func() { common.CleanupBodyStorage(c) })
+			err = validateSpeechOptionsFields(c)
+			if tc.wantError == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tc.wantError)
+			}
+			files, err := filepath.Glob(filepath.Join(tempDir, "multipart-*"))
+			require.NoError(t, err)
+			assert.Empty(t, files, "validation must release its own multipart spill files")
+			form, err := common.ParseMultipartFormReusable(c)
+			require.NoError(t, err)
+			defer form.RemoveAll()
+			require.Len(t, form.File["file"], 1)
+			replay, err := form.File["file"][0].Open()
+			require.NoError(t, err)
+			defer replay.Close()
+			data, err := io.ReadAll(replay)
+			require.NoError(t, err)
+			assert.Equal(t, audio, data, "cleaning the parsed form must preserve the replayable request body")
+		})
+	}
 }
