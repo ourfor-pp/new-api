@@ -17,7 +17,7 @@ func TestEstimateRequestTokenUsesValidatedVolcASRDuration(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	context, _ := gin.CreateTestContext(httptest.NewRecorder())
 	info := &relaycommon.RelayInfo{
-		OriginModelName: constant.ModelDoubaoSeedASRFlash,
+		OriginModelName: constant.ModelVolcASRFlash,
 		Request:         &dto.AudioRequest{LocalAudioDurationMS: 2499},
 	}
 
@@ -55,16 +55,18 @@ func TestEstimateRequestTokenUsesMappedVolcSpeechModel(t *testing.T) {
 		assert.Equal(t, 3, tokens)
 	})
 
-	t.Run("ASR 任意别名按时长预扣", func(t *testing.T) {
-		context, _ := gin.CreateTestContext(httptest.NewRecorder())
-		context.Set("model_mapping", `{"customer-asr-alias":"`+constant.ModelDoubaoSeedASRFlash+`"}`)
-		info := &relaycommon.RelayInfo{
-			OriginModelName: "customer-asr-alias",
-			Request:         &dto.AudioRequest{LocalAudioDurationMS: 2499},
-		}
+	for _, resourceID := range []string{constant.ModelVolcASRFlash, constant.ModelVolcASR20} {
+		t.Run(resourceID+" 任意别名按时长预扣", func(t *testing.T) {
+			context, _ := gin.CreateTestContext(httptest.NewRecorder())
+			context.Set("model_mapping", `{"customer-asr-alias":"`+resourceID+`"}`)
+			info := &relaycommon.RelayInfo{
+				OriginModelName: "customer-asr-alias",
+				Request:         &dto.AudioRequest{LocalAudioDurationMS: 2499},
+			}
 
-		tokens, err := EstimateRequestToken(context, &types.TokenCountMeta{}, info)
-		require.NoError(t, err)
-		assert.Equal(t, 42, tokens)
-	})
+			tokens, err := EstimateRequestToken(context, &types.TokenCountMeta{}, info)
+			require.NoError(t, err)
+			assert.Equal(t, 42, tokens)
+		})
+	}
 }

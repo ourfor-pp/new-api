@@ -88,12 +88,12 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 		return bytes.NewReader(jsonData), nil
 	}
 
-	if upstreamModelName == channelconstant.ModelDoubaoSeedASRFlash {
+	if channelconstant.IsVolcASRModel(upstreamModelName) {
 		if _, _, _, err := parseVolcSpeechCredential(info.ApiKey); err != nil {
 			return nil, types.NewError(err, types.ErrorCodeChannelInvalidKey)
 		}
 		if info.RelayMode != constant.RelayModeAudioTranscription {
-			return nil, errors.New("doubao-seed-asr-flash only supports audio transcriptions")
+			return nil, errors.New("VolcEngine ASR only supports audio transcriptions")
 		}
 		requestBody, err := buildVolcASRFlashRequestBody(c, request, info.ChannelOtherSettings.VolcSpeech)
 		if err != nil {
@@ -147,7 +147,7 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 			speechOptions = append(speechOptions, "platform_hotword_table=true")
 		}
 		info.VolcSpeechAudit = &relaycommon.VolcSpeechAuditInfo{
-			ResourceID:             volcASRFlashResourceID,
+			ResourceID:             upstreamModelName,
 			Protocol:               volcASRFlashProtocol,
 			TimestampGranularities: append([]string(nil), request.TimestampGranularities...),
 			SpeechOptions:          speechOptions,
@@ -357,7 +357,7 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	if upstreamModelName == channelconstant.ModelDoubaoSeedTTS20 {
 		return volcTTSV3URL, nil
 	}
-	if upstreamModelName == channelconstant.ModelDoubaoSeedASRFlash {
+	if channelconstant.IsVolcASRModel(upstreamModelName) {
 		return volcASRFlashURL, nil
 	}
 
@@ -424,8 +424,8 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *rel
 		req.Set("Content-Type", gin.MIMEJSON)
 		return nil
 	}
-	if upstreamModelName == channelconstant.ModelDoubaoSeedASRFlash {
-		headers, err := buildVolcSpeechHeaders(info.ApiKey, volcASRFlashResourceID, "X-Api-App-Key")
+	if channelconstant.IsVolcASRModel(upstreamModelName) {
+		headers, err := buildVolcSpeechHeaders(info.ApiKey, upstreamModelName, "X-Api-App-Key")
 		if err != nil {
 			return err
 		}
@@ -481,8 +481,7 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
 	upstreamModelName := info.EffectiveUpstreamModelName()
-	if upstreamModelName == channelconstant.ModelDoubaoSeedTTS20 ||
-		upstreamModelName == channelconstant.ModelDoubaoSeedASRFlash {
+	if channelconstant.IsVolcSpeechModel(upstreamModelName) {
 		return doVolcSpeechRequest(a, c, info, requestBody)
 	}
 
@@ -506,7 +505,7 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	if upstreamModelName == channelconstant.ModelDoubaoSeedTTS20 {
 		return handleVolcTTSV3Response(c, resp, info, c.GetString(contextKeyResponseFormat))
 	}
-	if upstreamModelName == channelconstant.ModelDoubaoSeedASRFlash {
+	if channelconstant.IsVolcASRModel(upstreamModelName) {
 		return handleVolcASRFlashResponse(c, resp, info, c.GetString(contextKeyResponseFormat))
 	}
 

@@ -243,7 +243,7 @@ func ValidateVolcSpeechAudioRequest(c *gin.Context, relayMode int, audioRequest 
 		supported := relayMode == relayconstant.RelayModeAudioSpeech &&
 			audioRequest.Model == channelconstant.ModelDoubaoSeedTTS20
 		supported = supported || relayMode == relayconstant.RelayModeAudioTranscription &&
-			audioRequest.Model == channelconstant.ModelDoubaoSeedASRFlash
+			channelconstant.IsVolcASRModel(audioRequest.Model)
 		if !supported {
 			return fmt.Errorf("speech_options is not supported for model %s in this audio operation", audioRequest.Model)
 		}
@@ -341,13 +341,20 @@ func ValidateVolcSpeechAudioRequest(c *gin.Context, relayMode int, audioRequest 
 		if audioRequest.ResponseFormat == "" {
 			audioRequest.ResponseFormat = "json"
 		}
-		if audioRequest.Model == channelconstant.ModelDoubaoSeedASRFlash {
+		if channelconstant.IsVolcASRModel(audioRequest.Model) {
+			resourceID := audioRequest.Model
+			if len(resourceID) > 256 || strings.IndexFunc(resourceID, func(r rune) bool {
+				return !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+					(r >= '0' && r <= '9') || strings.ContainsRune("._:-", r))
+			}) >= 0 {
+				return errors.New("invalid VolcEngine ASR resource ID")
+			}
 			if audioRequest.SpeechOptions != nil {
 				if speechOptionFieldProvided(c, "sample_rate") {
-					return errors.New("speech_options.sample_rate is not supported for doubao-seed-asr-flash")
+					return errors.New("speech_options.sample_rate is not supported for VolcEngine ASR")
 				}
 				if speechOptionFieldProvided(c, "context.images") {
-					return errors.New("speech_options.context.images is not verified for the current volc.bigasr.auc_turbo resource")
+					return errors.New("speech_options.context.images is not verified for this ASR integration")
 				}
 				if speechOptionFieldProvided(c, "detect") {
 					return errors.New("speech_options.detect is not exposed because the current resource returned no structured music or POI annotations")
@@ -415,20 +422,20 @@ func ValidateVolcSpeechAudioRequest(c *gin.Context, relayMode int, audioRequest 
 				}
 			}
 			if len(audioRequest.SubtitleFormats) > 0 {
-				return errors.New("doubao-seed-asr-flash does not support subtitle_formats; use response_format=srt or vtt")
+				return errors.New("VolcEngine ASR does not support subtitle_formats; use response_format=srt or vtt")
 			}
 			for _, granularity := range audioRequest.TimestampGranularities {
 				if granularity != "segment" && granularity != "word" {
-					return fmt.Errorf("unsupported timestamp granularity for doubao-seed-asr-flash: %s", granularity)
+					return fmt.Errorf("unsupported timestamp granularity for VolcEngine ASR: %s", granularity)
 				}
 			}
 			if len(audioRequest.TimestampGranularities) > 0 && !strings.EqualFold(audioRequest.ResponseFormat, "verbose_json") {
-				return errors.New("doubao-seed-asr-flash timestamp_granularities require response_format=verbose_json")
+				return errors.New("VolcEngine ASR timestamp_granularities require response_format=verbose_json")
 			}
 			switch strings.ToLower(audioRequest.ResponseFormat) {
 			case "json", "text", "verbose_json", "srt", "vtt":
 			default:
-				return fmt.Errorf("unsupported response_format for doubao-seed-asr-flash: %s", audioRequest.ResponseFormat)
+				return fmt.Errorf("unsupported response_format for VolcEngine ASR: %s", audioRequest.ResponseFormat)
 			}
 
 			if audioRequest.LocalAudioFormat != "" && audioRequest.LocalAudioDurationMS > 0 {

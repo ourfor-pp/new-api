@@ -17,7 +17,8 @@ var ModelList = []string{
 	"doubao-seed-1-6-thinking-250715",
 	"seed-1-6-thinking-250715",
 	constant.ModelDoubaoSeedTTS20,
-	constant.ModelDoubaoSeedASRFlash,
+	constant.ModelVolcASRFlash,
+	constant.ModelVolcASR20,
 }
 
 var ChannelName = "volcengine"

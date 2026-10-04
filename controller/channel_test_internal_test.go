@@ -2,10 +2,12 @@ package controller
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -16,11 +18,61 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type channelTestTransport func(*http.Request) (*http.Response, error)
+
+func (f channelTestTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+func TestMappedVolcASRChannelTestUsesAudioProtocol(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.Log{}))
+	user := model.User{Id: 98765, Username: "speech-channel-test", Group: "default", Status: common.UserStatusEnabled, Quota: 1000000}
+	require.NoError(t, db.Create(&user).Error)
+	savedRatios, err := common.Marshal(ratio_setting.GetModelRatioCopy())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(string(savedRatios))) })
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"speech-test":1}`))
+	if service.GetHttpClient() == nil {
+		service.InitHttpClient()
+	}
+	client := service.GetHttpClient()
+	savedTransport := client.Transport
+	t.Cleanup(func() { client.Transport = savedTransport })
+	for _, resourceID := range []string{constant.ModelVolcASRFlash, constant.ModelVolcASR20} {
+		t.Run(resourceID, func(t *testing.T) {
+			called := false
+			client.Transport = channelTestTransport(func(request *http.Request) (*http.Response, error) {
+				called = true
+				assert.Equal(t, "/api/v3/auc/bigmodel/recognize/flash", request.URL.Path)
+				assert.Equal(t, resourceID, request.Header.Get("X-Api-Resource-Id"))
+				var payload struct {
+					Audio struct {
+						Data string `json:"data"`
+					} `json:"audio"`
+				}
+				require.NoError(t, common.DecodeJson(request.Body, &payload))
+				assert.NotEmpty(t, payload.Audio.Data)
+				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"X-Api-Status-Code": {"20000000"}}, Body: io.NopCloser(strings.NewReader(`{"audio_info":{"duration":1000},"result":{"text":"test"}}`))}, nil
+			})
+			mapping, err := common.Marshal(map[string]string{"speech-test": resourceID})
+			require.NoError(t, err)
+			channel := &model.Channel{Id: 17, Type: constant.ChannelTypeVolcEngine, Key: "test-key", Status: common.ChannelStatusEnabled, Group: "default", Models: "speech-test", ModelMapping: common.GetPointer(string(mapping))}
+			result := testChannel(context.Background(), channel, user.Id, "speech-test", "", true)
+			require.NoError(t, result.localErr)
+			require.Nil(t, result.newAPIError)
+			assert.True(t, called)
+			assert.Equal(t, "/v1/audio/transcriptions", result.context.Request.URL.Path)
+		})
+	}
+}
 
 func TestValidateChannelProxy(t *testing.T) {
 	tests := []struct {
@@ -246,12 +298,15 @@ func TestBuildVolcSpeechChannelTestRequests(t *testing.T) {
 	assert.Equal(t, "mp3", ttsRequest.ResponseFormat)
 	assert.NotEmpty(t, ttsRequest.Input)
 
-	asrRequest, ok := buildTestRequest(constant.ModelDoubaoSeedASRFlash, "", nil, false).(*dto.AudioRequest)
-	require.True(t, ok)
-	assert.Equal(t, "wav", asrRequest.LocalAudioFormat)
-	assert.Equal(t, int64(200), asrRequest.LocalAudioDurationMS)
+	for _, resourceID := range []string{constant.ModelVolcASRFlash, constant.ModelVolcASR20} {
+		asrRequest, ok := buildTestRequest(resourceID, "", nil, false).(*dto.AudioRequest)
+		require.True(t, ok)
+		assert.Equal(t, "wav", asrRequest.LocalAudioFormat)
+		assert.Equal(t, int64(200), asrRequest.LocalAudioDurationMS)
+		assert.Equal(t, resourceID, asrRequest.Model)
+	}
 
-	body, contentType, err := buildVolcASRChannelTestBody(constant.ModelDoubaoSeedASRFlash)
+	body, contentType, err := buildVolcASRChannelTestBody(constant.ModelVolcASRFlash)
 	require.NoError(t, err)
 	request := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", bytes.NewReader(body))
 	request.Header.Set("Content-Type", contentType)
@@ -264,7 +319,7 @@ func TestBuildVolcSpeechChannelTestRequests(t *testing.T) {
 	require.GreaterOrEqual(t, len(wav), 44)
 	assert.Equal(t, "RIFF", string(wav[:4]))
 	assert.Equal(t, "WAVE", string(wav[8:12]))
-	assert.Equal(t, constant.ModelDoubaoSeedASRFlash, request.FormValue("model"))
+	assert.Equal(t, constant.ModelVolcASRFlash, request.FormValue("model"))
 }
 
 func TestShouldRetryHonorsForceRetryWithoutChangingDefaultGatewayTimeout(t *testing.T) {

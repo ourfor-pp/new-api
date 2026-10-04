@@ -187,7 +187,7 @@ func EstimateRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *rela
 			if effectiveModelName == constant.ModelDoubaoSeedTTS20 {
 				return utf8.RuneCountInString(request.Input), nil
 			}
-			if effectiveModelName == constant.ModelDoubaoSeedASRFlash && request.LocalAudioDurationMS > 0 {
+			if constant.IsVolcASRModel(effectiveModelName) && request.LocalAudioDurationMS > 0 {
 				return common.QuotaRound(float64(request.LocalAudioDurationMS) / 60000 * 1000), nil
 			}
 		}

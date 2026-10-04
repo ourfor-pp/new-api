@@ -327,7 +327,10 @@ func handleVolcASRFlashResponse(c *gin.Context, resp *http.Response, info *relay
 		return nil, types.NewErrorWithStatusCode(err, types.ErrorCodeReadResponseBodyFailed, http.StatusBadGateway)
 	}
 	if info.VolcSpeechAudit == nil {
-		info.VolcSpeechAudit = &relaycommon.VolcSpeechAuditInfo{ResourceID: volcASRFlashResourceID, Protocol: volcASRFlashProtocol}
+		info.VolcSpeechAudit = &relaycommon.VolcSpeechAuditInfo{
+			ResourceID: info.EffectiveUpstreamModelName(),
+			Protocol:   volcASRFlashProtocol,
+		}
 	}
 	info.VolcSpeechAudit.LogID = strings.TrimSpace(resp.Header.Get("X-Tt-Logid"))
 	setVolcSpeechAuditContext(c, info.VolcSpeechAudit)
@@ -469,7 +472,7 @@ func handleVolcASRFlashResponse(c *gin.Context, resp *http.Response, info *relay
 		}
 	default:
 		return nil, types.NewErrorWithStatusCode(
-			fmt.Errorf("unsupported response_format for doubao-seed-asr-flash: %s", responseFormat),
+			fmt.Errorf("unsupported response_format for VolcEngine ASR: %s", responseFormat),
 			types.ErrorCodeInvalidRequest,
 			http.StatusBadRequest,
 			types.ErrOptionWithSkipRetry(),
@@ -487,7 +490,7 @@ func handleVolcASRFlashResponse(c *gin.Context, resp *http.Response, info *relay
 	setVolcSpeechAuditContext(c, info.VolcSpeechAudit)
 	logger.LogInfo(c, fmt.Sprintf(
 		"火山语音请求完成: model=%s resource_id=%s protocol=%s log_id=%s audio_duration_ms=%d billing_units=%d timestamp_granularities=%v subtitle_formats=%v speech_options=%v context_text_count=%d hotword_count=%d replacement_count=%d subtitle_sentence_count=%d subtitle_word_count=%d",
-		info.OriginModelName, volcASRFlashResourceID, volcASRFlashProtocol, info.VolcSpeechAudit.LogID, durationMS, billingUnits,
+		info.OriginModelName, info.VolcSpeechAudit.ResourceID, info.VolcSpeechAudit.Protocol, info.VolcSpeechAudit.LogID, durationMS, billingUnits,
 		info.VolcSpeechAudit.TimestampGranularities, info.VolcSpeechAudit.SubtitleFormats,
 		info.VolcSpeechAudit.SpeechOptions, info.VolcSpeechAudit.ContextTextCount,
 		info.VolcSpeechAudit.HotwordCount, info.VolcSpeechAudit.ReplacementCount,

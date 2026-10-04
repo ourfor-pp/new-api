@@ -111,7 +111,11 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 			}
 		}
 	}
-	if constant.IsVolcSpeechModel(testModel) {
+	upstreamTestModel, _, mappingErr := relaycommon.ResolveMappedModelName(testModel, channel.GetModelMapping())
+	if mappingErr != nil {
+		return testResult{context: c, localErr: mappingErr}
+	}
+	if constant.IsVolcSpeechModel(upstreamTestModel) {
 		isStream = false
 	}
 
@@ -155,10 +159,9 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 			requestPath = "/v1/responses/compact"
 		}
 	}
-	switch testModel {
-	case constant.ModelDoubaoSeedTTS20:
+	if upstreamTestModel == constant.ModelDoubaoSeedTTS20 {
 		requestPath = "/v1/audio/speech"
-	case constant.ModelDoubaoSeedASRFlash:
+	} else if constant.IsVolcASRModel(upstreamTestModel) {
 		requestPath = "/v1/audio/transcriptions"
 	}
 	if strings.HasPrefix(requestPath, "/v1/responses/compact") {
@@ -167,7 +170,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 
 	var inboundBody io.Reader
 	contentType := "application/json"
-	if testModel == constant.ModelDoubaoSeedASRFlash {
+	if constant.IsVolcASRModel(upstreamTestModel) {
 		body, multipartContentType, buildErr := buildVolcASRChannelTestBody(testModel)
 		if buildErr != nil {
 			return testResult{
@@ -258,11 +261,17 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 			relayFormat = types.RelayFormatOpenAIAudio
 		}
 	}
-	if constant.IsVolcSpeechModel(testModel) {
+	if constant.IsVolcSpeechModel(upstreamTestModel) {
 		relayFormat = types.RelayFormatOpenAIAudio
 	}
 
-	request := buildTestRequest(testModel, endpointType, channel, isStream)
+	var request dto.Request
+	if constant.IsVolcSpeechModel(upstreamTestModel) {
+		request = buildTestRequest(upstreamTestModel, "", channel, false)
+		request.SetModelName(testModel)
+	} else {
+		request = buildTestRequest(testModel, endpointType, channel, isStream)
+	}
 
 	info, err := relaycommon.GenRelayInfo(c, relayFormat, request, nil)
 
@@ -555,7 +564,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 		Group:            info.UsingGroup,
 		Other:            other,
 	})
-	if info.RelayMode == relayconstant.RelayModeAudioSpeech {
+	if isAudioRelay {
 		common.SysLog(fmt.Sprintf("testing channel #%d, audio response bytes: %d", channel.Id, len(respBody)))
 	} else {
 		common.SysLog(fmt.Sprintf("testing channel #%d, response: \n%s", channel.Id, string(respBody)))
@@ -788,15 +797,15 @@ func buildVolcASRChannelTestBody(modelName string) ([]byte, string, error) {
 func buildTestRequest(model string, endpointType string, channel *model.Channel, isStream bool) dto.Request {
 	testResponsesInput := json.RawMessage(`[{"role":"user","content":"hi"}]`)
 
-	switch model {
-	case constant.ModelDoubaoSeedTTS20:
+	if model == constant.ModelDoubaoSeedTTS20 {
 		return &dto.AudioRequest{
 			Model:          model,
 			Input:          "你好",
 			Voice:          "alloy",
 			ResponseFormat: "mp3",
 		}
-	case constant.ModelDoubaoSeedASRFlash:
+	}
+	if constant.IsVolcASRModel(model) {
 		return &dto.AudioRequest{
 			Model:                model,
 			ResponseFormat:       "json",

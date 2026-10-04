@@ -13,7 +13,8 @@ import (
 func TestMarkVolcSpeechGatewayTimeoutRetry(t *testing.T) {
 	for _, modelName := range []string{
 		constant.ModelDoubaoSeedTTS20,
-		constant.ModelDoubaoSeedASRFlash,
+		constant.ModelVolcASRFlash,
+		constant.ModelVolcASR20,
 	} {
 		for _, statusCode := range []int{http.StatusGatewayTimeout, 524} {
 			apiErr := types.NewErrorWithStatusCode(errors.New("gateway timeout"), types.ErrorCodeBadResponse, statusCode)

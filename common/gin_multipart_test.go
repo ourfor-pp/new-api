@@ -37,7 +37,7 @@ func (s *multipartStreamingStorage) IsDisk() bool {
 func TestParseMultipartFormReusableStreamsBodyStorage(t *testing.T) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
-	require.NoError(t, writer.WriteField("model", "doubao-seed-asr-flash"))
+	require.NoError(t, writer.WriteField("model", "volc.bigasr.auc_turbo"))
 	require.NoError(t, writer.WriteField("timestamp_granularities", "word"))
 	require.NoError(t, writer.WriteField("timestamp_granularities[]", "segment"))
 	part, err := writer.CreateFormFile("file", "sample.wav")
@@ -57,13 +57,13 @@ func TestParseMultipartFormReusableStreamsBodyStorage(t *testing.T) {
 		TimestampGranularities []string `json:"timestamp_granularities"`
 	}
 	require.NoError(t, UnmarshalBodyReusable(context, &request))
-	assert.Equal(t, "doubao-seed-asr-flash", request.Model)
+	assert.Equal(t, "volc.bigasr.auc_turbo", request.Model)
 	assert.Equal(t, []string{"word", "segment"}, request.TimestampGranularities)
 
 	form, err := ParseMultipartFormReusable(context)
 	require.NoError(t, err)
 	defer form.RemoveAll()
-	assert.Equal(t, "doubao-seed-asr-flash", form.Value["model"][0])
+	assert.Equal(t, "volc.bigasr.auc_turbo", form.Value["model"][0])
 	require.Len(t, form.File["file"], 1)
 	file, err := form.File["file"][0].Open()
 	require.NoError(t, err)
@@ -89,7 +89,7 @@ func TestLargeTranscriptionMultipartUsesDiskWithoutGlobalDiskCache(t *testing.T)
 
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
-	require.NoError(t, writer.WriteField("model", "doubao-seed-asr-flash"))
+	require.NoError(t, writer.WriteField("model", "volc.bigasr.auc_turbo"))
 	part, err := writer.CreateFormFile("file", "sample.wav")
 	require.NoError(t, err)
 	_, err = part.Write(bytes.Repeat([]byte{0}, 1<<20))
