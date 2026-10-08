@@ -243,53 +243,57 @@ func TestMappedVolcTTSSubtitleOptionsRequireSSEAndApplyDefaults(t *testing.T) {
 }
 
 func TestMappedVolcASRValidatesAndKeepsBusinessModel(t *testing.T) {
-	const (
-		sampleRate    = 16000
-		bitsPerSample = 16
-		channels      = 1
-		durationMS    = 200
-	)
-	audioDataSize := sampleRate * durationMS / 1000 * channels * bitsPerSample / 8
-	wav := make([]byte, 44+audioDataSize)
-	copy(wav[0:4], "RIFF")
-	binary.LittleEndian.PutUint32(wav[4:8], uint32(len(wav)-8))
-	copy(wav[8:12], "WAVE")
-	copy(wav[12:16], "fmt ")
-	binary.LittleEndian.PutUint32(wav[16:20], 16)
-	binary.LittleEndian.PutUint16(wav[20:22], 1)
-	binary.LittleEndian.PutUint16(wav[22:24], channels)
-	binary.LittleEndian.PutUint32(wav[24:28], sampleRate)
-	binary.LittleEndian.PutUint32(wav[28:32], sampleRate*channels*bitsPerSample/8)
-	binary.LittleEndian.PutUint16(wav[32:34], channels*bitsPerSample/8)
-	binary.LittleEndian.PutUint16(wav[34:36], bitsPerSample)
-	copy(wav[36:40], "data")
-	binary.LittleEndian.PutUint32(wav[40:44], uint32(audioDataSize))
+	for _, resourceID := range []string{constant.ModelVolcASRFlash, constant.ModelVolcASR20} {
+		t.Run(resourceID, func(t *testing.T) {
+			const (
+				sampleRate    = 16000
+				bitsPerSample = 16
+				channels      = 1
+				durationMS    = 200
+			)
+			audioDataSize := sampleRate * durationMS / 1000 * channels * bitsPerSample / 8
+			wav := make([]byte, 44+audioDataSize)
+			copy(wav[0:4], "RIFF")
+			binary.LittleEndian.PutUint32(wav[4:8], uint32(len(wav)-8))
+			copy(wav[8:12], "WAVE")
+			copy(wav[12:16], "fmt ")
+			binary.LittleEndian.PutUint32(wav[16:20], 16)
+			binary.LittleEndian.PutUint16(wav[20:22], 1)
+			binary.LittleEndian.PutUint16(wav[22:24], channels)
+			binary.LittleEndian.PutUint32(wav[24:28], sampleRate)
+			binary.LittleEndian.PutUint32(wav[28:32], sampleRate*channels*bitsPerSample/8)
+			binary.LittleEndian.PutUint16(wav[32:34], channels*bitsPerSample/8)
+			binary.LittleEndian.PutUint16(wav[34:36], bitsPerSample)
+			copy(wav[36:40], "data")
+			binary.LittleEndian.PutUint32(wav[40:44], uint32(audioDataSize))
 
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
-	part, err := writer.CreateFormFile("file", "sample.wav")
-	require.NoError(t, err)
-	_, err = part.Write(wav)
-	require.NoError(t, err)
-	require.NoError(t, writer.WriteField("model", "customer-asr-alias"))
-	require.NoError(t, writer.WriteField("response_format", "verbose_json"))
-	require.NoError(t, writer.WriteField("timestamp_granularities[]", "word"))
-	require.NoError(t, writer.WriteField("timestamp_granularities[]", "segment"))
-	require.NoError(t, writer.WriteField("timestamp_granularities", "word"))
-	require.NoError(t, writer.Close())
+			var body bytes.Buffer
+			writer := multipart.NewWriter(&body)
+			part, err := writer.CreateFormFile("file", "sample.wav")
+			require.NoError(t, err)
+			_, err = part.Write(wav)
+			require.NoError(t, err)
+			require.NoError(t, writer.WriteField("model", "customer-asr-alias"))
+			require.NoError(t, writer.WriteField("response_format", "verbose_json"))
+			require.NoError(t, writer.WriteField("timestamp_granularities[]", "word"))
+			require.NoError(t, writer.WriteField("timestamp_granularities[]", "segment"))
+			require.NoError(t, writer.WriteField("timestamp_granularities", "word"))
+			require.NoError(t, writer.Close())
 
-	gin.SetMode(gin.TestMode)
-	context, _ := gin.CreateTestContext(httptest.NewRecorder())
-	context.Set("model_mapping", `{"customer-asr-alias":"`+constant.ModelDoubaoSeedASRFlash+`"}`)
-	context.Request = httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", bytes.NewReader(body.Bytes()))
-	context.Request.Header.Set("Content-Type", writer.FormDataContentType())
+			gin.SetMode(gin.TestMode)
+			context, _ := gin.CreateTestContext(httptest.NewRecorder())
+			context.Set("model_mapping", `{"customer-asr-alias":"`+resourceID+`"}`)
+			context.Request = httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", bytes.NewReader(body.Bytes()))
+			context.Request.Header.Set("Content-Type", writer.FormDataContentType())
 
-	request, err := GetAndValidAudioRequest(context, relayconstant.RelayModeAudioTranscription)
-	require.NoError(t, err)
-	assert.Equal(t, "customer-asr-alias", request.Model)
-	assert.Equal(t, "wav", request.LocalAudioFormat)
-	assert.Equal(t, int64(durationMS), request.LocalAudioDurationMS)
-	assert.Equal(t, []string{"word", "segment"}, request.TimestampGranularities)
+			request, err := GetAndValidAudioRequest(context, relayconstant.RelayModeAudioTranscription)
+			require.NoError(t, err)
+			assert.Equal(t, "customer-asr-alias", request.Model)
+			assert.Equal(t, "wav", request.LocalAudioFormat)
+			assert.Equal(t, int64(durationMS), request.LocalAudioDurationMS)
+			assert.Equal(t, []string{"word", "segment"}, request.TimestampGranularities)
+		})
+	}
 }
 
 func TestMappedVolcASRRejectsUnsupportedResponseFormatBeforeFileParsing(t *testing.T) {
@@ -301,7 +305,7 @@ func TestMappedVolcASRRejectsUnsupportedResponseFormatBeforeFileParsing(t *testi
 
 	gin.SetMode(gin.TestMode)
 	context, _ := gin.CreateTestContext(httptest.NewRecorder())
-	context.Set("model_mapping", `{"another-asr-alias":"`+constant.ModelDoubaoSeedASRFlash+`"}`)
+	context.Set("model_mapping", `{"another-asr-alias":"`+constant.ModelVolcASRFlash+`"}`)
 	context.Request = httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", bytes.NewReader(body.Bytes()))
 	context.Request.Header.Set("Content-Type", writer.FormDataContentType())
 
@@ -319,7 +323,7 @@ func TestMappedVolcASRRejectsTimestampGranularityOutsideVerboseJSON(t *testing.T
 
 	gin.SetMode(gin.TestMode)
 	context, _ := gin.CreateTestContext(httptest.NewRecorder())
-	context.Set("model_mapping", `{"customer-asr-alias":"`+constant.ModelDoubaoSeedASRFlash+`"}`)
+	context.Set("model_mapping", `{"customer-asr-alias":"`+constant.ModelVolcASRFlash+`"}`)
 	context.Request = httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", bytes.NewReader(body.Bytes()))
 	context.Request.Header.Set("Content-Type", writer.FormDataContentType())
 
@@ -373,7 +377,7 @@ func TestMappedVolcASRMultipartSpeechOptionsPreserveExplicitFalse(t *testing.T) 
 
 	gin.SetMode(gin.TestMode)
 	context, _ := gin.CreateTestContext(httptest.NewRecorder())
-	context.Set("model_mapping", `{"customer-asr-alias":"`+constant.ModelDoubaoSeedASRFlash+`"}`)
+	context.Set("model_mapping", `{"customer-asr-alias":"`+constant.ModelVolcASRFlash+`"}`)
 	context.Request = httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", bytes.NewReader(body.Bytes()))
 	context.Request.Header.Set("Content-Type", writer.FormDataContentType())
 
@@ -430,7 +434,7 @@ func TestMappedVolcASRRejectsUnknownAndUnverifiedSpeechOptionsBeforeFileParsing(
 
 			gin.SetMode(gin.TestMode)
 			context, _ := gin.CreateTestContext(httptest.NewRecorder())
-			context.Set("model_mapping", `{"customer-asr-alias":"`+constant.ModelDoubaoSeedASRFlash+`"}`)
+			context.Set("model_mapping", `{"customer-asr-alias":"`+constant.ModelVolcASRFlash+`"}`)
 			context.Request = httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", bytes.NewReader(body.Bytes()))
 			context.Request.Header.Set("Content-Type", writer.FormDataContentType())
 
@@ -467,7 +471,7 @@ func TestMappedVolcASRRejectsInvalidSpeechOptionsBeforeFileParsing(t *testing.T)
 
 			gin.SetMode(gin.TestMode)
 			context, _ := gin.CreateTestContext(httptest.NewRecorder())
-			context.Set("model_mapping", `{"customer-asr-alias":"`+constant.ModelDoubaoSeedASRFlash+`"}`)
+			context.Set("model_mapping", `{"customer-asr-alias":"`+constant.ModelVolcASRFlash+`"}`)
 			context.Request = httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", bytes.NewReader(body.Bytes()))
 			context.Request.Header.Set("Content-Type", writer.FormDataContentType())
 
@@ -491,7 +495,7 @@ func TestMappedVolcASRRejectsDuplicateSpeechOptionsAndExplicitZero(t *testing.T)
 
 		gin.SetMode(gin.TestMode)
 		context, _ := gin.CreateTestContext(httptest.NewRecorder())
-		context.Set("model_mapping", `{"customer-asr-alias":"`+constant.ModelDoubaoSeedASRFlash+`"}`)
+		context.Set("model_mapping", `{"customer-asr-alias":"`+constant.ModelVolcASRFlash+`"}`)
 		context.Request = httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", bytes.NewReader(body.Bytes()))
 		context.Request.Header.Set("Content-Type", writer.FormDataContentType())
 
@@ -508,7 +512,7 @@ func TestMappedVolcASRRejectsDuplicateSpeechOptionsAndExplicitZero(t *testing.T)
 
 		gin.SetMode(gin.TestMode)
 		context, _ := gin.CreateTestContext(httptest.NewRecorder())
-		context.Set("model_mapping", `{"customer-asr-alias":"`+constant.ModelDoubaoSeedASRFlash+`"}`)
+		context.Set("model_mapping", `{"customer-asr-alias":"`+constant.ModelVolcASRFlash+`"}`)
 		context.Request = httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", bytes.NewReader(body.Bytes()))
 		context.Request.Header.Set("Content-Type", writer.FormDataContentType())
 

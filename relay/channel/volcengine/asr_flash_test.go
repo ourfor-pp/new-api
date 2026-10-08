@@ -28,7 +28,7 @@ func newASRMultipartContext(t *testing.T, filename string, audio []byte) *gin.Co
 	require.NoError(t, err)
 	_, err = part.Write(audio)
 	require.NoError(t, err)
-	require.NoError(t, writer.WriteField("model", channelconstant.ModelDoubaoSeedASRFlash))
+	require.NoError(t, writer.WriteField("model", channelconstant.ModelVolcASRFlash))
 	require.NoError(t, writer.Close())
 
 	recorder := httptest.NewRecorder()
@@ -122,35 +122,64 @@ func TestVolcASRAdditionChannelPreservesZero(t *testing.T) {
 }
 
 func TestVolcASRMappedAliasUsesUpstreamModelForAdapterRouting(t *testing.T) {
-	context := newASRMultipartContext(t, "sample.opus", []byte("audio-data"))
-	info := &relaycommon.RelayInfo{
-		OriginModelName: "customer-defined-asr-alias",
-		RelayMode:       relayconstant.RelayModeAudioTranscription,
-		ChannelMeta: &relaycommon.ChannelMeta{
-			ApiKey:            "new-console-key",
-			UpstreamModelName: channelconstant.ModelDoubaoSeedASRFlash,
-		},
+	for _, resourceID := range []string{channelconstant.ModelVolcASRFlash, channelconstant.ModelVolcASR20, "volc.futureasr.auc_turbo"} {
+		t.Run(resourceID, func(t *testing.T) {
+			context := newASRMultipartContext(t, "sample.opus", []byte("audio-data"))
+			info := &relaycommon.RelayInfo{
+				OriginModelName: "customer-defined-asr-alias",
+				RelayMode:       relayconstant.RelayModeAudioTranscription,
+				ChannelMeta: &relaycommon.ChannelMeta{
+					ApiKey:            "new-console-key",
+					UpstreamModelName: resourceID,
+				},
+			}
+
+			body, err := (&Adaptor{}).ConvertAudioRequest(context, info, dto.AudioRequest{
+				Model:                resourceID,
+				ResponseFormat:       "json",
+				LocalAudioFormat:     "ogg",
+				LocalAudioDurationMS: 1000,
+				Metadata:             []byte(`{"resource_id":"client-cannot-override-channel-mapping"}`),
+			})
+			require.NoError(t, err)
+			require.NotNil(t, body)
+			_, err = io.Copy(io.Discard, body)
+			require.NoError(t, err)
+			require.NotNil(t, info.VolcSpeechAudit)
+			assert.Equal(t, resourceID, info.VolcSpeechAudit.ResourceID)
+
+			requestURL, err := (&Adaptor{}).GetRequestURL(info)
+			require.NoError(t, err)
+			assert.Equal(t, volcASRFlashURL, requestURL)
+
+			headers := http.Header{}
+			require.NoError(t, (&Adaptor{}).SetupRequestHeader(context, &headers, info))
+			assert.Equal(t, "new-console-key", headers.Get("X-Api-Key"))
+			assert.Equal(t, resourceID, headers.Get("X-Api-Resource-Id"))
+			info.VolcSpeechAudit = nil
+			response := &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"X-Api-Status-Code": {"20000000"}},
+				Body:       io.NopCloser(bytes.NewBufferString(`{"audio_info":{"duration":60000},"result":{"text":"test"}}`)),
+			}
+			usage, apiErr := (&Adaptor{}).DoResponse(context, response, info)
+			require.Nil(t, apiErr)
+			assert.Equal(t, 1000, usage.(*dto.Usage).PromptTokens)
+			assert.Equal(t, resourceID, info.VolcSpeechAudit.ResourceID)
+			assert.Equal(t, "customer-defined-asr-alias", info.OriginModelName)
+		})
 	}
+}
 
-	body, err := (&Adaptor{}).ConvertAudioRequest(context, info, dto.AudioRequest{
-		Model:                channelconstant.ModelDoubaoSeedASRFlash,
-		ResponseFormat:       "json",
-		LocalAudioFormat:     "ogg",
-		LocalAudioDurationMS: 1000,
-	})
-	require.NoError(t, err)
-	require.NotNil(t, body)
-	require.NotNil(t, info.VolcSpeechAudit)
-	assert.Equal(t, volcASRFlashResourceID, info.VolcSpeechAudit.ResourceID)
-
-	requestURL, err := (&Adaptor{}).GetRequestURL(info)
-	require.NoError(t, err)
-	assert.Equal(t, volcASRFlashURL, requestURL)
-
-	headers := http.Header{}
-	require.NoError(t, (&Adaptor{}).SetupRequestHeader(context, &headers, info))
-	assert.Equal(t, "new-console-key", headers.Get("X-Api-Key"))
-	assert.Equal(t, volcASRFlashResourceID, headers.Get("X-Api-Resource-Id"))
+func TestVolcASRRemovedAliasDoesNotReachUpstream(t *testing.T) {
+	context := newASRMultipartContext(t, "sample.wav", []byte("audio-data"))
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "customer-asr",
+		RelayMode:       relayconstant.RelayModeAudioTranscription,
+		ChannelMeta:     &relaycommon.ChannelMeta{ApiKey: "api-key", UpstreamModelName: "doubao-seed-asr-flash"},
+	}
+	_, err := (&Adaptor{}).ConvertAudioRequest(context, info, dto.AudioRequest{Model: "doubao-seed-asr-flash"})
+	require.ErrorContains(t, err, "unsupported audio relay mode")
 }
 
 func TestVolcASRFlashStreamingBodyUsesExactContentLength(t *testing.T) {
@@ -172,7 +201,7 @@ func TestVolcASRFlashStreamingBodyUsesExactContentLength(t *testing.T) {
 	defer server.Close()
 
 	info := &relaycommon.RelayInfo{
-		OriginModelName: channelconstant.ModelDoubaoSeedASRFlash,
+		OriginModelName: channelconstant.ModelVolcASRFlash,
 		ChannelMeta:     &relaycommon.ChannelMeta{ApiKey: "new-console-key"},
 	}
 	response, err := doVolcSpeechRequestURL(&Adaptor{}, context, info, requestBody, server.URL)
@@ -213,9 +242,9 @@ func TestVolcASRFlashResponseUsesActualDurationAndVerboseSegments(t *testing.T) 
 	require.NoError(t, err)
 	context, recorder := newVolcSpeechTestContext()
 	info := &relaycommon.RelayInfo{
-		OriginModelName: channelconstant.ModelDoubaoSeedASRFlash,
+		OriginModelName: channelconstant.ModelVolcASRFlash,
 		Request:         &dto.AudioRequest{LocalAudioDurationMS: 60000},
-		VolcSpeechAudit: &relaycommon.VolcSpeechAuditInfo{ResourceID: volcASRFlashResourceID, Protocol: volcASRFlashProtocol},
+		VolcSpeechAudit: &relaycommon.VolcSpeechAuditInfo{ResourceID: channelconstant.ModelVolcASRFlash, Protocol: volcASRFlashProtocol},
 	}
 	response := &http.Response{
 		StatusCode: http.StatusOK,
@@ -269,7 +298,7 @@ func TestVolcASRFlashVerboseJSONReturnsRequestedWordAndSegmentTimestamps(t *test
 	require.NoError(t, err)
 	context, recorder := newVolcSpeechTestContext()
 	info := &relaycommon.RelayInfo{
-		OriginModelName: channelconstant.ModelDoubaoSeedASRFlash,
+		OriginModelName: channelconstant.ModelVolcASRFlash,
 		Request: &dto.AudioRequest{
 			LocalAudioDurationMS: 60000,
 			TimestampGranularities: []string{
@@ -278,7 +307,7 @@ func TestVolcASRFlashVerboseJSONReturnsRequestedWordAndSegmentTimestamps(t *test
 			},
 		},
 		VolcSpeechAudit: &relaycommon.VolcSpeechAuditInfo{
-			ResourceID:             volcASRFlashResourceID,
+			ResourceID:             channelconstant.ModelVolcASRFlash,
 			Protocol:               volcASRFlashProtocol,
 			TimestampGranularities: []string{"segment", "word"},
 		},
@@ -486,9 +515,9 @@ func TestVolcASRFlashEmptyTranscriptStillBillsLocalDurationFallback(t *testing.T
 	require.NoError(t, err)
 	context, recorder := newVolcSpeechTestContext()
 	info := &relaycommon.RelayInfo{
-		OriginModelName: channelconstant.ModelDoubaoSeedASRFlash,
+		OriginModelName: channelconstant.ModelVolcASRFlash,
 		Request:         &dto.AudioRequest{LocalAudioDurationMS: 60000},
-		VolcSpeechAudit: &relaycommon.VolcSpeechAuditInfo{ResourceID: volcASRFlashResourceID, Protocol: volcASRFlashProtocol},
+		VolcSpeechAudit: &relaycommon.VolcSpeechAuditInfo{ResourceID: channelconstant.ModelVolcASRFlash, Protocol: volcASRFlashProtocol},
 	}
 	response := &http.Response{
 		StatusCode: http.StatusOK,
@@ -511,7 +540,7 @@ func TestVolcASRFlashTextResponseAndProviderFailure(t *testing.T) {
 	context, recorder := newVolcSpeechTestContext()
 	info := &relaycommon.RelayInfo{
 		Request:         &dto.AudioRequest{},
-		VolcSpeechAudit: &relaycommon.VolcSpeechAuditInfo{ResourceID: volcASRFlashResourceID, Protocol: volcASRFlashProtocol},
+		VolcSpeechAudit: &relaycommon.VolcSpeechAuditInfo{ResourceID: channelconstant.ModelVolcASRFlash, Protocol: volcASRFlashProtocol},
 	}
 	response := &http.Response{
 		StatusCode: http.StatusOK,
@@ -576,7 +605,7 @@ func TestVolcASRFlashMalformedSuccessResponseRemainsRetryable(t *testing.T) {
 			context, _ := newVolcSpeechTestContext()
 			info := &relaycommon.RelayInfo{
 				Request:         &dto.AudioRequest{LocalAudioDurationMS: 1000},
-				VolcSpeechAudit: &relaycommon.VolcSpeechAuditInfo{ResourceID: volcASRFlashResourceID, Protocol: volcASRFlashProtocol},
+				VolcSpeechAudit: &relaycommon.VolcSpeechAuditInfo{ResourceID: channelconstant.ModelVolcASRFlash, Protocol: volcASRFlashProtocol},
 			}
 			response := &http.Response{
 				StatusCode: http.StatusOK,

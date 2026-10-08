@@ -3,12 +3,18 @@
 火山 Seed-TTS 2.0 与录音文件极速 ASR 使用独立的火山语音渠道。服务端底层模型分别为：
 
 - `doubao-seed-tts-2.0`
-- `doubao-seed-asr-flash`
+- `volc.seedasr.auc`（ASR 2.0）或 `volc.bigasr.auc_turbo`（ASR 1.0 极速版）
 
 生产环境对客户端只公开以下映射模型：
 
 - `sxh-tts` → `doubao-seed-tts-2.0`
-- `sxh-asr` → `doubao-seed-asr-flash`
+- `sxh-asr` → `volc.seedasr.auc`
+
+从 `.7` 起，ASR 直接使用渠道模型映射的最终值作为 `X-Api-Resource-Id`，不再支持旧的 `doubao-seed-asr-flash` 自定义标识，也没有额外的资源 ID 配置字段。需要 1.0 时将 `sxh-asr` 映射到 `volc.bigasr.auc_turbo`；需要 2.0 时映射到 `volc.seedasr.auc`。客户端请求模型和计费模型仍为 `sxh-asr`。
+
+这两种资源都沿用 `/api/v3/auc/bigmodel/recognize/flash` 同步接口。2026-10-05 已用当前账号验证 `volc.seedasr.auc` 在该接口成功返回，且控制台确认归入 2.0；其他账号应核实相应权限。后续遵循 `volc.<ASR 系列>.auc...` 命名的资源会按映射值发送，但仍需确认资源本身支持此接口；模型映射不会自动切换到标准版异步或流式协议。
+
+升级 `.7` 时必须同时迁移渠道中的旧 ASR 映射和旧模型列表项。仅替换应用而保留旧标识会导致 ASR 请求失败；回滚应用时也应恢复对应映射。
 
 渠道类型选择火山方舟（VolcEngine），但不要与已有文本或图像渠道共用。渠道 Key 支持两种格式：
 

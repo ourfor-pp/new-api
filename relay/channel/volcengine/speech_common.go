@@ -14,12 +14,11 @@ import (
 )
 
 const (
-	volcTTSV3URL           = "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
-	volcTTSResourceID      = "seed-tts-2.0"
-	volcTTSProtocol        = "v3-http-chunked"
-	volcASRFlashURL        = "https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash"
-	volcASRFlashResourceID = "volc.bigasr.auc_turbo"
-	volcASRFlashProtocol   = "v3-http-flash"
+	volcTTSV3URL         = "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
+	volcTTSResourceID    = "seed-tts-2.0"
+	volcTTSProtocol      = "v3-http-chunked"
+	volcASRFlashURL      = "https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash"
+	volcASRFlashProtocol = "v3-http-flash"
 )
 
 type volcSpeechAuthKind string

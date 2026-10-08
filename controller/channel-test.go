@@ -160,16 +160,15 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	if isStream && constant.EndpointType(endpointType) == constant.EndpointTypeGemini {
 		requestPath = strings.Replace(requestPath, ":generateContent", ":streamGenerateContent", 1)
 	}
-	switch protocolModel {
-	case constant.ModelDoubaoSeedTTS20:
+	if protocolModel == constant.ModelDoubaoSeedTTS20 {
 		requestPath = "/v1/audio/speech"
-	case constant.ModelDoubaoSeedASRFlash:
+	} else if constant.IsVolcASRModel(protocolModel) {
 		requestPath = "/v1/audio/transcriptions"
 	}
 
 	var inboundBody io.Reader
 	contentType := "application/json"
-	if protocolModel == constant.ModelDoubaoSeedASRFlash {
+	if constant.IsVolcASRModel(protocolModel) {
 		body, multipartContentType, buildErr := buildVolcASRChannelTestBody(testModel)
 		if buildErr != nil {
 			return testResult{
@@ -568,7 +567,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 		Group:            info.UsingGroup,
 		Other:            other,
 	})
-	if info.RelayMode == relayconstant.RelayModeAudioSpeech {
+	if isAudioRelay {
 		common.SysLog(fmt.Sprintf("testing channel #%d, audio response bytes: %d", channel.Id, len(respBody)))
 	} else {
 		common.SysLog(fmt.Sprintf("testing channel #%d, response: \n%s", channel.Id, string(respBody)))
@@ -802,15 +801,15 @@ func buildVolcASRChannelTestBody(modelName string) ([]byte, string, error) {
 func buildTestRequest(model string, endpointType string, channel *model.Channel, isStream bool) dto.Request {
 	testResponsesInput := json.RawMessage(`[{"role":"user","content":"hi"}]`)
 
-	switch model {
-	case constant.ModelDoubaoSeedTTS20:
+	if model == constant.ModelDoubaoSeedTTS20 {
 		return &dto.AudioRequest{
 			Model:          model,
 			Input:          "你好",
 			Voice:          "alloy",
 			ResponseFormat: "mp3",
 		}
-	case constant.ModelDoubaoSeedASRFlash:
+	}
+	if constant.IsVolcASRModel(model) {
 		return &dto.AudioRequest{
 			Model:                model,
 			ResponseFormat:       "json",
