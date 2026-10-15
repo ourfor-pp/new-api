@@ -24,7 +24,7 @@ import (
 )
 
 func TestMappedQwenImageProtocol(t *testing.T) {
-	for _, model := range []string{"qwen-image-2.0-pro", "qwen-image-2.0"} {
+	for _, model := range []string{"qwen-image-2.0-pro", "qwen-image-2.0", "qwen-image-3.0"} {
 		for _, mode := range []int{constant.RelayModeImagesGenerations, constant.RelayModeImagesEdits} {
 			for _, field := range []string{"image", "image[]"} {
 				t.Run(model+"/"+strconv.Itoa(mode)+"/"+field, func(t *testing.T) {
@@ -83,7 +83,11 @@ func TestMappedQwenImageProtocol(t *testing.T) {
 					if !adaptor.IsSyncImageModel {
 						return
 					}
-					response := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"output":{"choices":[{"message":{"content":[{"image":"https://example.invalid/result.png"}]}}]},"usage":{"image_count":1}}`))}
+					usageJSON := `"image_count":1`
+					if model == "qwen-image-3.0" {
+						usageJSON = `"output_image_count":1,"input_image_count":0`
+					}
+					response := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"output":{"choices":[{"message":{"content":[{"image":"https://example.invalid/result.png"}]}}]},"usage":{` + usageJSON + `}}`))}
 					_, apiErr := adaptor.DoResponse(c, response, info)
 					require.Nil(t, apiErr)
 					var result dto.ImageResponse
