@@ -186,6 +186,7 @@ func oaiFormEdit2AliImageEdit(c *gin.Context, info *relaycommon.RelayInfo, reque
 		},
 	}
 	imageRequest.Parameters = AliImageParameters{
+		Size:      strings.ReplaceAll(request.Size, "x", "*"),
 		N:         int(lo.FromPtrOr(request.N, uint(1))),
 		Watermark: request.Watermark,
 	}
