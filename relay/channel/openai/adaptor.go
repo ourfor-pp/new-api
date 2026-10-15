@@ -450,7 +450,6 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 		var requestBody bytes.Buffer
 		writer := multipart.NewWriter(&requestBody)
 
-		writer.WriteField("model", request.Model)
 		// 使用已解析的 multipart 表单，避免重复解析
 		mf := c.Request.MultipartForm
 		if mf == nil {
@@ -463,14 +462,28 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 			mf = form
 		}
 
-		// 写入所有非文件字段
+		// Apply rules to a private field copy so channel retries retain the input.
 		if mf != nil {
+			fields := make(map[string][]string, len(mf.Value)+1)
 			for key, values := range mf.Value {
+				fields[key] = values
+			}
+			fields["model"] = []string{request.Model}
+			fields, err := relaycommon.ApplyImageFormDeletes(fields, info)
+			if err != nil {
+				return nil, err
+			}
+			if err := writer.WriteField("model", request.Model); err != nil {
+				return nil, err
+			}
+			for key, values := range fields {
 				if key == "model" {
 					continue
 				}
 				for _, value := range values {
-					writer.WriteField(key, value)
+					if err := writer.WriteField(key, value); err != nil {
+						return nil, err
+					}
 				}
 			}
 		}
@@ -565,7 +578,10 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 		}
 
 		// 关闭 multipart 编写器以设置分界线
-		writer.Close()
+		if err := writer.Close(); err != nil {
+			return nil, err
+		}
+		info.UpstreamRequestBodySize = int64(requestBody.Len())
 		c.Request.Header.Set("Content-Type", writer.FormDataContentType())
 		return &requestBody, nil
 
