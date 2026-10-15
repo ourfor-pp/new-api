@@ -1,3 +1,56 @@
+# rc.44 集成验证与上线准备（2026-10-15）
+
+## 当前集成范围
+
+在现有 `upgrade/rc40-validation` 分支合入官方标签 `v1.0.0-rc.44`（`633b4c5b1`），合并前为 `a1b95f52b`。保留 SXH `.7` ASR 资源映射、`.8` 图生图 multipart 参数删除和重试隔离，以及此前的语音字幕、流式输出、预扣和审计定制。没有引入 rc.44 之后 main 上的 14 个提交。
+
+版本标识改为 `1.0.0-rc.44-sxh.dev`。这仍是开发验证线，不是生产候选或新稳定线；没有推送、发布镜像或修改生产。
+
+两个文本冲突按语义处理：`controller/channel-test.go` 保留音频响应只记字节数，并使用 `common.LogText`；`controller/relay.go` 合并上游 i18n 导入并去掉重复 task DTO 导入。tokenkit 替换后，火山 TTS 字符数和 ASR 时长的特殊预扣分支仍优先执行；没有把语音改为普通文本 Token 计费。
+
+## 本轮验证
+
+环境：Go 1.26.0、Bun 1.3.11；根模块及 tokenkit 声明 Go 1.26，relaykit 声明 Go 1.25.1。原始日志、合成数据工具及上游对照位于未跟踪目录 `.tmp/rc44-validation-evidence/`。
+
+| 检查 | 命令 / 结果 |
+| --- | --- |
+| 后端构建 | `GOMAXPROCS=2 go build -p 2 -o .tmp/rc44-validation-evidence/new-api` 通过 |
+| 后端全量回归 | `GOMAXPROCS=2 go test -p 2 -timeout 10m ./...` 通过 |
+| 语音并发回归 | `GOMAXPROCS=2 go test -p 2 -race ./relay/channel/volcengine ./relay/helper -run 'Volc\|Mapped\|SpeechOptions'` 通过 |
+| SXH 定向复验 | `controller`、`relay`、`service` 的映射语音、参数和图片重试用例通过 |
+| RelayKit 独立模块 | 模块内 `GOWORK=off GOMAXPROCS=2 go build -p 2 ./...` 和 `go test -p 2 ./...` 通过 |
+| TokenKit 独立模块 | 模块内 `GOWORK=off GOMAXPROCS=2 go build -p 2 ./...` 和 `go test -p 2 ./...` 通过 |
+| 前端依赖、类型和构建 | `bun install --frozen-lockfile`、`bun run typecheck`、`bun run build` 通过 |
+| 前端全量回归 | `bun run test --maxWorkers=2`：188 个文件、2252 个用例全部通过 |
+| 前端 lint | 未通过：164 errors、65 warnings；对原始 rc.44 使用同版本 oxlint 比较，文件、规则和消息完全一致，新增错误 0 个；没有顺带修改上游存量问题 |
+| 数据库定向回归 | 配置 `TEST_MYSQL_DSN` / `TEST_POSTGRES_DSN` 后，`GOMAXPROCS=2 go test -p 1 ./model ./controller -run 'Migration\|Migrate\|DatabaseMatrix' -timeout 10m` 通过 |
+
+### 真实数据库升级矩阵
+
+执行 `python3 .tmp/rc44-validation-evidence/run-migrations.py`。旧库由 `sxh/rc22` 的 `6474cae52` 源码初始化；新库由本次合并源码初始化。MySQL 8.0.46、PostgreSQL 16.15 运行于仅绑定本机的临时容器，SQLite 3.50.4 使用项目实际驱动。每个引擎均验证新库和旧库升级，再重复启动新版本两次。
+
+六组场景全部通过：用户/令牌额度、渠道语音配置和资源映射、价格、日志数据保持，用户名和 Token Key 唯一约束有效，重复迁移结构指纹一致。MySQL/PostgreSQL 配置独立日志库；SQLite 完整性检查为 `ok`。这是合成存量数据验证，不能替代生产快照迁移演练，也没有验证 ClickHouse。
+
+### 认证验证边界
+
+参考 [OWASP ASVS 5.0.0](https://owasp.org/projects/asvs)、[Authentication Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html) 和 [Session Management Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html)。本次集成重点是服务端权限范围、凭据用途隔离、过期/撤销、敏感操作重新验证与单次证明，以及审计不泄露凭据。
+
+后端全量回归包含既有访问令牌生命周期、scope 路由、过期令牌、证明重放/绑定、权限提升和审计脱敏用例。没有自行改写上游认证机制；本轮不是完整 ASVS 合规审计，生产 TLS、浏览器会话和 Manager 的真实凭据联调仍待验收。
+
+## 上线方案与放行条件
+
+1. **审定集成结果**：复核 SXH 差异、前端回归及存量 lint 处置，确定候选提交。构建唯一版本与提交号镜像，建议候选版本 `1.0.0-rc.44-sxh.1`，使用前核对未占用。当前 `.dev` 不能作为已验收候选。
+2. **生产副本演练**：从当前线上一致性备份建立只读基线，在副本上完成 `.8 → rc.44` 迁移、重复启动与应用回滚试验，核对用户/额度/渠道/定价/任务/日志。不把演练数据库写回生产。
+3. **Manager 兼容性**：Manager 客户端使用管理 API Bearer 凭据；上线前确认其当前类型。rc.44 首次启动写入旧面板访问令牌的 30 天退役时间，重启不续期。若仍使用旧令牌，应规划迁移到新 scoped PAT；目前调用涉及 `api_key:read`、`api_key:write`、`api_key:reveal`、`log:read`，仍受所属用户角色和权限限制。用隔离 Manager 验证授权码开通、充值/续期、额度、消费明细和趋势；不要直接更改线上凭据或重启 Manager。
+4. **真实候选验收**：对最终镜像完成 TTS→ASR、字幕/SSE、失败退款、图生图参数删除与备用渠道重试、插件提交/轮询/下载及实际计费。涉及真实提供方请求时先明确请求范围和费用授权。本轮未发起付费请求。
+5. **配置与用户通知**：明确 `DEFAULT_LANGUAGE=zh-CN` 是否保留中文默认消息；确认普通用户默认 365 天日志范围；告知游乐场历史聊天记录将清空一次。检查升级后的插件版本和已有定价，不能凭插件加载成功宣称业务兼容。
+6. **切换与回滚**：备份数据库并校验字节数、SHA-256 和完整性，预先上传/校验镜像并保留 `.8` 镜像与 Compose。建议连续 30 秒业务静默、最多等 10 分钟，未达条件则延期；停旧实例前最后检查在途请求，单实例 SQLite 不并行共享写库。只切换 new-api，启动后 60 秒仍不健康则执行已经演练的回滚。没有安全 drain 时明确仍有长请求竞争窗口。涉及不兼容数据库恢复须单独授权，不能默认覆盖切换后新增账务数据。
+7. **上线后验收**：内部健康、公开接口、Manager 业务、最小真实调用、计费/退款和日志隐私；观察 5xx、鉴权失败和任务积压，记录实际停机秒数。生产切换、自动迁移和必要的配置变更需在最终方案中明确授权范围。
+
+当前结论：可以继续准备上线，但不能因代码合并或上述本地验证通过就直接判定生产可上线。
+
+---
+
 # rc.40 本地合并验证（2026-09-23）
 
 ## 结论和版本边界

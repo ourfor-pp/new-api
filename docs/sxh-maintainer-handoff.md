@@ -66,6 +66,8 @@
 
 ## 当前版本状态
 
+- 2026-10-15：`upgrade/rc40-validation` 继续集成官方 rc.44，版本标识 `1.0.0-rc.44-sxh.dev`，保留 SXH `.7`/`.8` 修订。验证结果和上线放行条件见 [升级验证与上线准备](upgrades/rc40-validation.md)；尚未部署，稳定线仍为 `sxh/rc22`。
+
 - 2026-09-23：独立升级分支 `upgrade/rc40-validation` 已集成 rc.40 并开展本地验证；结果和上线前缺口见 [rc.40 验证报告](upgrades/rc40-validation.md)。以下 rc.22 状态继续作为原稳定线记录，新分支尚未发布。
 
 - rc.22 稳定线 `VERSION`：`1.0.0-rc.22-sxh.8`。
