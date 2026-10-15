@@ -25,6 +25,15 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	info.InitChannelMeta(c)
 	info.BillingImageCount = nil
 	info.ImageRequestCount = 0
+	info.ParamOverrideAudit = nil
+	// Multipart conversion changes Content-Type. Each channel attempt must
+	// begin with the boundary belonging to the original stored body.
+	const originalContentTypeKey = "image_original_content_type"
+	if original, exists := c.Get(originalContentTypeKey); exists {
+		c.Request.Header.Set("Content-Type", original.(string))
+	} else {
+		c.Set(originalContentTypeKey, c.Request.Header.Get("Content-Type"))
+	}
 
 	imageReq, ok := info.Request.(*dto.ImageRequest)
 	if !ok {
@@ -55,6 +64,9 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	var jsonData []byte
 
 	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
+		if len(info.ParamOverride) > 0 {
+			return types.NewError(fmt.Errorf("image parameter overrides require request body passthrough to be disabled"), types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		}
 		storage, err := common.GetBodyStorage(c)
 		if err != nil {
 			return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())

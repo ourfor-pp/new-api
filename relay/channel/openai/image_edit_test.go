@@ -13,6 +13,7 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -95,4 +96,60 @@ func TestConvertImageEditRequestMultipart(t *testing.T) {
 
 		convertAndReplay(t, c, prompt)
 	})
+}
+
+// A second channel attempt must see the original fields and all input files.
+func TestImageEditDeletionPreservesFilesAndRetry(t *testing.T) {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	for key, values := range map[string][]string{"model": {"client-model"}, "input_fidelity": {"high", "low"}, "tag": {"one", "two"}} {
+		for _, value := range values {
+			require.NoError(t, writer.WriteField(key, value))
+		}
+	}
+	for _, file := range []struct{ field, name, content string }{{"image[]", "a.png", "first image"}, {"image[]", "b.png", "second image"}, {"mask", "mask.png", "mask bytes"}} {
+		part, err := writer.CreateFormFile(file.field, file.name)
+		require.NoError(t, err)
+		_, err = io.WriteString(part, file.content)
+		require.NoError(t, err)
+	}
+	require.NoError(t, writer.Close())
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/edits", &body)
+	c.Request.Header.Set("Content-Type", writer.FormDataContentType())
+	require.NoError(t, c.Request.ParseMultipartForm(32<<20))
+	defer c.Request.MultipartForm.RemoveAll()
+	for _, deleteField := range []bool{true, false} {
+		info := &relaycommon.RelayInfo{RelayMode: relayconstant.RelayModeImagesEdits, ChannelMeta: &relaycommon.ChannelMeta{}}
+		if deleteField {
+			info.ParamOverride = map[string]any{"operations": []any{map[string]any{"mode": "delete", "path": "input_fidelity"}}}
+		}
+		converted, err := (&Adaptor{}).ConvertImageRequest(c, info, dto.ImageRequest{Model: "upstream-model"})
+		require.NoError(t, err)
+		buffer, ok := converted.(*bytes.Buffer)
+		require.True(t, ok)
+		replay := httptest.NewRequest(http.MethodPost, "/v1/images/edits", bytes.NewReader(buffer.Bytes()))
+		replay.Header.Set("Content-Type", c.Request.Header.Get("Content-Type"))
+		require.NoError(t, replay.ParseMultipartForm(32<<20))
+		defer replay.MultipartForm.RemoveAll()
+		assert.Equal(t, "upstream-model", replay.FormValue("model"))
+		assert.Equal(t, []string{"one", "two"}, replay.MultipartForm.Value["tag"])
+		if deleteField {
+			assert.NotContains(t, replay.MultipartForm.Value, "input_fidelity")
+		} else {
+			assert.Equal(t, []string{"high", "low"}, replay.MultipartForm.Value["input_fidelity"])
+		}
+		require.Len(t, replay.MultipartForm.File["image[]"], 2)
+		require.Len(t, replay.MultipartForm.File["mask"], 1)
+		for field, expected := range map[string][]string{"image[]": {"first image", "second image"}, "mask": {"mask bytes"}} {
+			for i, header := range replay.MultipartForm.File[field] {
+				file, err := header.Open()
+				require.NoError(t, err)
+				data, err := io.ReadAll(file)
+				require.NoError(t, err)
+				require.NoError(t, file.Close())
+				assert.Equal(t, expected[i], string(data))
+			}
+		}
+	}
 }
