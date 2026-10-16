@@ -1187,6 +1187,54 @@ func TestAlibabaOpenAIImageDecodeAndSubmission(t *testing.T) {
 		assert.Equal(t, map[string]any{"image_count": float64(2)}, alibabaObject(t, value))
 	})
 
+	// Keep the rc22 mapped-model and multipart-size regressions on the plugin
+	// path that replaced the legacy Ali image adaptor.
+	for _, upstream := range []string{"qwen-image-2.0", "qwen-image-2.0-pro", "qwen-image-3.0"} {
+		for _, field := range []string{"image", "image[]"} {
+			t.Run("mapped multipart "+upstream+"/"+field, func(t *testing.T) {
+				const alias = "sxh-image-alternate-1"
+				refs := []string{"request_file:" + field, "request_file:" + field + "#1"}
+				files := make([]any, len(refs))
+				for i, ref := range refs {
+					files[i] = map[string]any{"ref": ref, "field": field, "filename": "reference.png", "mimeType": "image/png", "size": 10}
+				}
+				value, err := plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_image", "decodeRequest"}, map[string]any{
+					"protocol": "openai_image", "operation": "edit", "model": alias, "upstreamModel": upstream,
+					"path": "/v1/images/edits", "method": http.MethodPost,
+					"body": map[string]any{"kind": "multipart", "files": files, "fields": map[string][]string{
+						"model": {alias}, "prompt": {"combine references"}, "size": {"1536x1024"}, "n": {"1"},
+					}},
+				})
+				require.NoError(t, err)
+				resolved := alibabaObject(t, value)
+				assert.Equal(t, alias, resolved["model"], "the client identity remains available for billing")
+				value, err = plugin.Engine.Call(t.Context(), "buildSubmitRequest", map[string]any{
+					"model": alias, "upstreamModel": upstream, "requestBody": resolved["requestBody"],
+					"baseUrl": "https://dashscope.aliyuncs.com", "apiKey": "test-key",
+				})
+				require.NoError(t, err)
+				descriptor := alibabaObject(t, value)
+				assert.Equal(t, "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation", descriptor["url"])
+				assert.NotContains(t, descriptor["headers"], "X-DashScope-Async")
+				body := descriptor["body"].(map[string]any)
+				assert.Equal(t, upstream, body["model"])
+				parameters := body["parameters"].(map[string]any)
+				assert.Equal(t, "1536*1024", parameters["size"])
+				assert.Equal(t, float64(1), parameters["n"])
+				messages := body["input"].(map[string]any)["messages"].([]any)
+				require.Len(t, messages, 1)
+				content := messages[0].(map[string]any)["content"].([]any)
+				require.Len(t, content, 3)
+				for i, ref := range refs {
+					image := content[i].(map[string]any)["image"].(map[string]any)
+					assert.Equal(t, ref, image["__fileRef"])
+					assert.Equal(t, "dataUrl", image["encoding"])
+				}
+				assert.Equal(t, "combine references", content[2].(map[string]any)["text"])
+			})
+		}
+	}
+
 	// wanx2.1-imageedit selects its operation with input.function. OpenAI edit
 	// fields map onto the documented body: the image becomes base_image_url, a
 	// mask becomes mask_image_url and selects local repainting, and the native
