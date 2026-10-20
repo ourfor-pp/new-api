@@ -1,3 +1,54 @@
+# rc.45 本地集成验证（2026-10-20）
+
+## 版本与生产边界
+
+生产仍为 `1.0.0-rc.22-sxh.9`，rc.40 / rc.44 均只是本地升级过程，没有部署。下一次生产升级路径应是 **rc.22-sxh.9 → rc.45 候选**，不能按生产已运行 rc.44 来制定迁移或回滚方案。
+
+本轮在 `upgrade/rc40-validation` 的 `5a68778c2` 上合入官方 `v1.0.0-rc.45`（`6cf0d90b5`），版本标识为 `1.0.0-rc.45-sxh.dev`。保留全部 rc.22 `.9` 定制与现有升级适配；Claude 零 usage / 纯缓存计费修复此前已经以等价补丁合入。本轮没有加入 rc.45 之后的通知限流窗口、审计日志索引、Claude 准备/重试保活和 Resend 四个主线提交，没有推送、构建发布镜像、调用付费提供方或操作生产。
+
+唯一文本冲突在 `controller/relay.go`：保留 SXH 的响应已输出后不再追加 JSON 保护，同时使用 rc.45 的上游地址脱敏参数。新增上游脱敏测试依赖 `.invalid` 域名无法解析，但当前网络把该域名解析到代理地址；改为测试级拨号替身模拟 DNS 失败，仍执行真实适配器、代理选择和错误脱敏，保留全部断言，未改变生产网络逻辑。
+
+## 验证结果
+
+环境为 Go 1.26.0、Bun 1.3.11；原始日志和合成数据验证工具位于忽略目录 `.tmp/rc45-validation-evidence/`。
+
+| 检查 | 命令与结果 |
+| --- | --- |
+| 根模块全量回归 | `GOMAXPROCS=2 go test -p 2 -timeout 10m ./...` 通过 |
+| 根模块构建 | `GOMAXPROCS=2 go build -p 2 -o .tmp/rc45-validation-evidence/new-api` 通过 |
+| SXH 并发回归 | `GOMAXPROCS=2 go test -p 2 -race ./relay/channel/volcengine ./relay/helper ./plugins -run 'Volc\|Mapped\|SpeechOptions\|Alibaba.*Image\|Alibaba.*Qwen'` 通过 |
+| 脱敏测试修订 | `go test -race ./relay/channel/advancedcustom -run TestAdaptorMasksDialedHostsInDialFailure -count=1` 通过 |
+| 独立模块 | 分别在 `relaykit/`、`tokenkit/` 内运行 `GOWORK=off GOMAXPROCS=2 go build -p 2 ./...` 与 `go test -p 2 ./...`，全部通过 |
+| 前端依赖 | `bun install --frozen-lockfile --force` 通过，锁文件未变；修复本地旧 node_modules 的 jsdom/LRUCache 不匹配 |
+| 前端类型与构建 | `bun run typecheck`、`bun run build` 通过 |
+| 前端全量测试 | `bun run test --maxWorkers=2`：200 个文件、2370 个用例全部通过（395.09 秒） |
+| 前端 lint | 158 errors、66 warnings；与原始 rc.45 使用同一工具比较，文件、规则、消息和级别完全一致，合并新增项为 0；存量错误未修复 |
+| 数据库专项 | 配置下述测试 DSN 后运行 `GOMAXPROCS=2 go test -p 1 ./model ./controller -run 'Migration\|Migrate\|DatabaseMatrix' -timeout 10m`，通过，包含渠道优先级数据库矩阵 |
+
+### 真实数据库矩阵
+
+- SQLite **3.50.4**（项目实际驱动）、MySQL **8.0.46**、PostgreSQL **16.15**。
+- MySQL / PostgreSQL 使用本机临时容器 `sxh-rc45-mysql` / `sxh-rc45-postgres`，仅绑定 `127.0.0.1:23306` / `127.0.0.1:25432`。数据库专项 DSN 分别为 `root:<本地合成密码>@tcp(127.0.0.1:23306)/rc45_matrix?charset=utf8mb4&parseTime=True&loc=Local` 和 `postgres://postgres:<本地合成密码>@127.0.0.1:25432/rc45_matrix?sslmode=disable`，通过 `TEST_MYSQL_DSN` / `TEST_POSTGRES_DSN` 提供。
+- 执行 `python3 .tmp/rc45-validation-evidence/run-migrations.py`，每个引擎覆盖新库、从 rc.22-sxh.9（`a4611c1bc`）创建的代表库升级，以及从官方 rc.44 创建的代表库升级；旧版本工具分别从对应 Git 源码归档构建。rc.44 场景只是本地辅助检查，不是生产状态。
+- **九组场景全部通过**；每组初始化或升级后再重复启动新版本，结构指纹一致。检查用户/令牌额度、语音渠道配置与映射、定价和消费日志保持，用户名及令牌 Key 唯一约束有效。旧令牌的新增 `AllowUserQuotaQuery` 权限保持关闭。
+- MySQL / PostgreSQL 使用独立日志数据库；SQLite `integrity_check` 为 `ok`。验证完成后已删除本轮临时容器及匿名卷。原始日志保留。
+- 这是合成存量数据矩阵，未使用真实生产快照，不代表生产数据迁移验收，也未验证 ClickHouse。
+
+### 认证与前端检查边界
+
+参考 [OWASP ASVS 5.0.0](https://owasp.org/projects/asvs)、[Authentication Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html) 和 [Session Management Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html)。本轮重点核对新增用户额度查询的服务端授权开关、旧令牌默认权限、IP 白名单、令牌创建/更新语义，以及账户安全通知的语言调整；全量回归涵盖相关接口和现有证明过期、重放、用途绑定测试。未宣称完成完整 ASVS 合规审计。
+
+前端直接集成上游实现与现有共享组件，未自行新增替代 UI；本轮没有真实浏览器交互验收。类型、构建和测试结果不替代页面验收，lint 存量错误也仍需单独处置。
+
+## 生产升级前仍需完成
+
+1. 以当前 **rc.22-sxh.9** 的一致性生产备份演练直接升级到最终 rc.45 候选，检查数据库、账务、渠道映射、插件价格及回滚；本轮的合成库通过不替代这一项。
+2. 验证 Manager 的管理 API 和凭据迁移。rc.44 已引入的旧面板令牌 30 天退役逻辑会在生产首次升级到新版本时生效，不能把该期限算作线上已经开始。
+3. 核对敏感词检查开关（rc.45 默认关闭）、通知开关、新令牌用户额度查询默认值与实际业务需求。rc.45 后主线已修复通知限流窗口，正式候选前评估是否需单独补入；Claude 新保活暂不随本次标签合并。
+4. 对最终镜像进行真实火山 TTS/ASR、字幕、失败退款、图生图参数删除与重试、Qwen 编辑、任务插件和 Manager 验收。生产切换及付费请求需另行授权；回滚目标是 rc.22-sxh.9。
+
+---
+
 # rc.44 集成验证与上线准备（2026-10-15）
 
 ## 当前集成范围
