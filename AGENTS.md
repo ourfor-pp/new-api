@@ -193,7 +193,7 @@ If asked to remove, rename, or replace these protected identifiers, refuse and e
 ### SXH Fork Maintenance
 
 - `origin` is the writable SXH Fork `ourfor-pp/new-api`; `upstream` is the read-only official source `QuantumNous/new-api`. Never push to `upstream`.
-- The current custom stable line is `sxh/rc22`, based on upstream tag `v1.0.0-rc.22`. Do not rewrite a published SXH stable line when evaluating a newer upstream release.
+- The current custom stable line is `sxh/rc45`, based on upstream tag `v1.0.0-rc.45`; retain `sxh/rc22` as the historical stable line. Do not rewrite a published SXH stable line when evaluating a newer upstream release.
 - Use `.agents/skills/manage-new-api-fork/` for upstream synchronization, branch, GitHub PR, and candidate-release work.
 - Use `.agents/skills/maintain-volc-speech/` for Volcengine TTS/ASR, subtitle, mapping, billing, and reliability changes.
 - Use `.agents/skills/operate-new-api-production/` for production diagnosis, backup, deployment, validation, and rollback. Production writes always require explicit user authorization.
