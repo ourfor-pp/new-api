@@ -158,6 +158,64 @@ func reserveTokenQuotaDB(id int, quota int) (bool, error) {
 	return result.RowsAffected == 1, result.Error
 }
 
+// RefundUserQuotaReservation restores the balance used by the next reservation
+// before returning. Without Redis reservations write directly to the database,
+// so their refunds must also bypass the batch queue. With Redis the persistence
+// delta can remain batched, but the authoritative cache must be updated inline.
+// This increment is not idempotent; callers must never retry it on error.
+func RefundUserQuotaReservation(id int, quota int) error {
+	if quota < 0 {
+		return errors.New("quota cannot be negative")
+	}
+	if err := common.ValidateWalletQuota(quota); err != nil {
+		return err
+	}
+	if quota == 0 {
+		return nil
+	}
+	if !common.RedisEnabled {
+		return increaseUserQuota(id, quota)
+	}
+	if common.BatchUpdateEnabled {
+		addNewRecord(BatchUpdateTypeUserQuota, id, quota)
+	} else if err := increaseUserQuota(id, quota); err != nil {
+		return err
+	}
+	result, err := cacheApplyUserQuotaDelta(id, int64(quota))
+	if err != nil {
+		return err
+	}
+	if result != cacheQuotaOK && common.BatchUpdateEnabled {
+		return errors.New("user quota refund is pending persistence and cache is unavailable")
+	}
+	return nil
+}
+
+// RefundTokenQuotaReservation has the same completion and single-call contract
+// as RefundUserQuotaReservation, including the token's used-quota accounting.
+func RefundTokenQuotaReservation(id int, key string, quota int) error {
+	if quota < 0 {
+		return errors.New("quota cannot be negative")
+	}
+	if quota == 0 {
+		return nil
+	}
+	if !common.RedisEnabled {
+		return increaseTokenQuota(id, quota)
+	}
+	if err := persistTokenQuotaDelta(id, quota); err != nil {
+		return err
+	}
+	result, err := cacheApplyTokenQuotaDelta(id, key, int64(quota))
+	if err != nil {
+		return err
+	}
+	if result != cacheQuotaOK && common.BatchUpdateEnabled {
+		return errors.New("token quota refund is pending persistence and cache is unavailable")
+	}
+	return nil
+}
+
 // TryReserveUserQuota atomically checks and deducts a user's wallet quota.
 // 缓存命中时以缓存余额为准（避免批量模式下过期的数据库余额放大并发超扣）；
 // Redis 异常或水合失败时降级为数据库条件更新，保证服务可用。

@@ -214,8 +214,11 @@ type ProtocolBinding struct {
 }
 
 const (
-	ContextKeyPinnedPlugin    = "task_plugin_pinned_plugin"
-	ContextKeyPinnedRoute     = "task_plugin_pinned_route"
+	ContextKeyPinnedPlugin = "task_plugin_pinned_plugin"
+	ContextKeyPinnedRoute  = "task_plugin_pinned_route"
+	// ContextKeyImageRouting pins a generation, while image providers follow channel selection.
+	ContextKeyImageRouting    = "task_plugin_image_channel_routing"
+	ContextKeyImageChannel    = "task_plugin_image_selected_channel"
 	ContextKeyPinnedEndpoint  = "task_plugin_pinned_endpoint"
 	ContextKeyRouteRequest    = "task_plugin_route_request"
 	ContextKeyProtocolRequest = "task_plugin_protocol_request"
@@ -530,7 +533,8 @@ func (g *RoutingGeneration) LookupEndpoint(method, path, model string) (Protocol
 }
 
 // LookupEndpointCandidates returns every plugin that can serve a shared model
-// endpoint, in ascending key order. Each candidate decodes before distribution.
+// endpoint, in ascending key order. Image routing narrows these to the selected
+// channel; other shared protocols decode candidates before distribution.
 func (g *RoutingGeneration) LookupEndpointCandidates(method, path, model string) []ProtocolBinding {
 	if g == nil {
 		return nil

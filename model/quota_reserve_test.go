@@ -1,15 +1,125 @@
 package model
 
 import (
+	"context"
+	"fmt"
 	"math"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/schema"
 )
+
+func TestRefundQuotaReservationsDatabaseMatrix(t *testing.T) {
+	for _, dialect := range []common.DatabaseType{common.DatabaseTypeSQLite, common.DatabaseTypeMySQL, common.DatabaseTypePostgreSQL} {
+		t.Run(string(dialect), func(t *testing.T) {
+			var driver gorm.Dialector
+			switch dialect {
+			case common.DatabaseTypeSQLite:
+				driver = sqlite.Open(":memory:")
+			case common.DatabaseTypeMySQL:
+				if os.Getenv("TEST_MYSQL_DSN") == "" {
+					t.Skip("TEST_MYSQL_DSN is not configured")
+				}
+				driver = mysql.Open(os.Getenv("TEST_MYSQL_DSN"))
+			case common.DatabaseTypePostgreSQL:
+				if os.Getenv("TEST_POSTGRES_DSN") == "" {
+					t.Skip("TEST_POSTGRES_DSN is not configured")
+				}
+				driver = postgres.Open(os.Getenv("TEST_POSTGRES_DSN"))
+			}
+			db, err := gorm.Open(driver, &gorm.Config{NamingStrategy: schema.NamingStrategy{TablePrefix: fmt.Sprintf("refund_%d_", time.Now().UnixNano())}})
+			require.NoError(t, err)
+			sqlDB, err := db.DB()
+			require.NoError(t, err)
+			sqlDB.SetMaxOpenConns(1)
+			oldDB := DB
+			oldMain, oldLog := common.MainDatabaseType(), common.LogDatabaseType()
+			DB = db
+			common.SetDatabaseTypes(dialect, oldLog)
+			initCol()
+			t.Cleanup(func() {
+				require.NoError(t, db.Migrator().DropTable(&User{}, &Token{}))
+				require.NoError(t, sqlDB.Close())
+				DB = oldDB
+				common.SetDatabaseTypes(oldMain, oldLog)
+				initCol()
+			})
+			require.NoError(t, db.AutoMigrate(&User{}, &Token{}))
+			query := "SELECT version()"
+			if dialect == common.DatabaseTypeSQLite {
+				query = "SELECT sqlite_version()"
+			}
+			var version string
+			require.NoError(t, db.Raw(query).Scan(&version).Error)
+			t.Logf("database version: %s", version)
+			for _, tc := range []struct {
+				name                    string
+				redis, batch, cacheLost bool
+			}{
+				{name: "database"},
+				{name: "database_batch", batch: true},
+				{name: "redis", redis: true},
+				{name: "redis_batch", redis: true, batch: true},
+				{name: "redis_batch_cache_lost", redis: true, batch: true, cacheLost: true},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					resetBatchUpdateTestState(t)
+					if tc.redis {
+						useUserCacheMiniRedis(t)
+					}
+					common.BatchUpdateEnabled = tc.batch
+					user := createReserveTestUser(t, 6000)
+					token := createReserveTestToken(t, 6000)
+					reserved, err := TryReserveUserQuota(user.Id, 5000)
+					require.NoError(t, err)
+					require.True(t, reserved)
+					reserved, err = TryReserveTokenQuota(token.Id, token.Key, 5000, false)
+					require.NoError(t, err)
+					require.True(t, reserved)
+					if tc.cacheLost {
+						require.NoError(t, common.RDB.Del(context.Background(), getUserCacheKey(user.Id), getTokenCacheKey(token.Key)).Err())
+					}
+					userErr := RefundUserQuotaReservation(user.Id, 5000)
+					tokenErr := RefundTokenQuotaReservation(token.Id, token.Key, 5000)
+					if tc.cacheLost {
+						require.Error(t, userErr, "caller must stop instead of retrying against a stale database balance")
+						require.Error(t, tokenErr)
+						batchUpdate()
+						assert.Equal(t, 6000, getUserQuotaFromDB(t, user.Id))
+						assert.Equal(t, 6000, getTokenFromDB(t, token.Id).RemainQuota)
+						assert.Zero(t, getTokenFromDB(t, token.Id).UsedQuota)
+						return
+					}
+					require.NoError(t, userErr)
+					require.NoError(t, tokenErr)
+					// No batch flush or sleep before reserving the fallback provider.
+					reserved, err = TryReserveUserQuota(user.Id, 3000)
+					require.NoError(t, err)
+					require.True(t, reserved)
+					reserved, err = TryReserveTokenQuota(token.Id, token.Key, 3000, false)
+					require.NoError(t, err)
+					require.True(t, reserved)
+					batchUpdate()
+					assert.Equal(t, 3000, getUserQuotaFromDB(t, user.Id))
+					assert.Equal(t, 3000, getTokenFromDB(t, token.Id).RemainQuota)
+					assert.Equal(t, 3000, getTokenFromDB(t, token.Id).UsedQuota)
+					batchUpdate()
+					assert.Equal(t, 3000, getUserQuotaFromDB(t, user.Id), "refund is not queued again")
+					assert.Equal(t, 3000, getTokenFromDB(t, token.Id).RemainQuota)
+				})
+			}
+		})
+	}
+}
 
 func createReserveTestUser(t *testing.T, quota int) User {
 	t.Helper()

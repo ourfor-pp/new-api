@@ -69,6 +69,10 @@ func geminiRelayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewA
 }
 
 func Relay(c *gin.Context, relayFormat types.RelayFormat) {
+	relayWithImageAttempt(c, relayFormat, nil)
+}
+
+func relayWithImageAttempt(c *gin.Context, relayFormat types.RelayFormat, imageAttempt *imageChannelAttempt) {
 
 	requestId := c.GetString(common.RequestIdKey)
 	//group := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
@@ -91,6 +95,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	defer func() {
 		if newAPIError != nil {
+			if imageAttempt != nil {
+				imageAttempt.err = newAPIError
+				return
+			}
 			service.RecordRequestPolicyTermination(c, newAPIError)
 			logger.LogError(c, common.LogText("relay error: %s", common.LocalLogPreview(newAPIError.Error())))
 			newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), requestId))
@@ -144,10 +152,17 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 	}()
 
+	if imageAttempt != nil {
+		imageAttempt.prepareBilling(relayInfo)
+	}
+
 	if newAPIError = relay.PrepareRequestBilling(c, relayInfo); newAPIError != nil {
 		return
 	}
 	defer func() {
+		if imageAttempt != nil && newAPIError != nil {
+			imageAttempt.refund(c, relayInfo)
+		}
 		newAPIError = relay.RefundFailedRequestBilling(c, relayInfo, newAPIError)
 	}()
 
@@ -166,6 +181,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		relayInfo.PerformanceBusinessRejection = false
 		relayInfo.PerformanceOutputTokens = 0
 		relayInfo.RetryIndex = retryParam.GetRetry()
+		if imageAttempt != nil {
+			relayInfo.RetryIndex = imageAttempt.index
+		}
 		channel, channelErr := getChannel(c, relayInfo, retryParam)
 		if channelErr != nil {
 			logger.LogError(c, channelErr.Error())
@@ -210,11 +228,18 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		newAPIError = service.NormalizeViolationFeeError(newAPIError)
 		relayInfo.LastError = newAPIError
 
-		decision := service.DecideRelayRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry())
+		remaining := common.RetryTimes - retryParam.GetRetry()
+		if imageAttempt != nil {
+			remaining = imageAttempt.remaining
+		}
+		decision := service.DecideRelayRetry(c, newAPIError, remaining)
+		if imageAttempt != nil {
+			imageAttempt.retry = decision.Action == "retry"
+		}
 		service.RecordPolicyFailure(c, channel.Id, newAPIError, decision)
 		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError, relayInfo)
 
-		if decision.Action != "retry" {
+		if imageAttempt != nil || decision.Action != "retry" {
 			break
 		}
 	}
@@ -266,6 +291,15 @@ var upgrader = websocket.Upgrader{
 }
 
 func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service.RetryParam) (*model.Channel, *types.NewAPIError) {
+	if _, sharedImage := c.Get(pluginruntime.ContextKeyImageRouting); sharedImage {
+		value, _ := c.Get(pluginruntime.ContextKeyImageChannel)
+		channel, ok := value.(*model.Channel)
+		if !ok || channel == nil {
+			return nil, types.NewError(errors.New(i18n.T(c, i18n.MsgRelayRetryNoAvailableChannel, map[string]any{"Group": info.UsingGroup, "Model": info.OriginModelName})), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		}
+		service.RequestPolicy(c).BeginAttempt(channel, info.UsingGroup)
+		return channel, nil
+	}
 	if info.ChannelMeta == nil {
 		autoBan := c.GetBool("auto_ban")
 		autoBanInt := 1
@@ -480,6 +514,10 @@ func executeTaskSubmissionWith(
 	relayInfo *relaycommon.RelayInfo,
 	submit taskSubmitAttempt,
 ) (*taskSubmissionOutcome, *taskdto.TaskError) {
+	return executeTaskSubmissionAttempt(c, relayInfo, submit, nil)
+}
+
+func executeTaskSubmissionAttempt(c *gin.Context, relayInfo *relaycommon.RelayInfo, submit taskSubmitAttempt, imageAttempt *imageChannelAttempt) (*taskSubmissionOutcome, *taskdto.TaskError) {
 	policy := service.RequestPolicy(c)
 	diagnostics := newTaskPluginSubmitDiagnostics(c)
 	diagnostics.start(relayInfo)
@@ -490,6 +528,9 @@ func executeTaskSubmissionWith(
 	defer func() {
 		if !durable && relayInfo.Billing != nil {
 			diagnostics.refund(stage)
+			if imageAttempt != nil {
+				imageAttempt.refund(c, relayInfo)
+			}
 			relayInfo.Billing.Refund(c)
 		}
 	}()
@@ -563,7 +604,14 @@ func executeTaskSubmissionWith(
 
 		taskAPIError := taskSubmissionAPIError(taskErr)
 		relayInfo.LastError = taskAPIError
-		decision := decideTaskRetry(c, taskErr, common.RetryTimes-retryParam.GetRetry())
+		remaining := common.RetryTimes - retryParam.GetRetry()
+		if imageAttempt != nil {
+			remaining = imageAttempt.remaining
+		}
+		decision := decideTaskRetry(c, taskErr, remaining)
+		if imageAttempt != nil {
+			imageAttempt.retry = decision.Action == "retry"
+		}
 		service.RecordPolicyFailure(c, channel.Id, taskAPIError, decision)
 		if !taskErr.LocalError {
 			processChannelError(c,
@@ -575,7 +623,7 @@ func executeTaskSubmissionWith(
 
 		willRetry := decision.Action == "retry"
 		diagnostics.attemptFailed(retryParam.GetRetry()+1, channel, taskErr, willRetry)
-		if !willRetry {
+		if imageAttempt != nil || !willRetry {
 			break
 		}
 	}

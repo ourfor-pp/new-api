@@ -32,6 +32,9 @@ func AppendTaskPluginIdentityFilter(c *gin.Context, pluginKey string) {
 	if c == nil {
 		return
 	}
+	if _, sharedImage := c.Get(jsplugin.ContextKeyImageRouting); sharedImage {
+		return
+	}
 	channelTypes, pluginKeys := pinnedTaskPluginIdentities(c, pluginKey)
 	GetChannelConstraints(c).AddFilter(dto.ChannelFilter{
 		Kind:                   dto.FilterTaskPluginIdentity,
